@@ -1,0 +1,16 @@
+# Byte-compiled / cache / logs
+__pycache__/
+*.py[cod]
+*$py.class
+.vscode/
+lightning_logs/
+.ipynb_checkpoints
+
+# Ignore everything inside models/ EXCEPT what we whitelist
+models/**
+!models/LSTM/
+!models/transformer/
+!models/XGboost/
+!models/*.py
+!models/*.md
+!models/README

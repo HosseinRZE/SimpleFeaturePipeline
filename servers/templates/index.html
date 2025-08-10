@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>XGBoost Predictor</title>
+  <script src="https://unpkg.com/lightweight-charts@5.0.8/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    html,body{height:100%;margin:0;background:#111827;color:#f3f4f6;font-family:system-ui}
+    #chart{height:calc(100% - 3rem)}
+    #controls{height:3rem;display:flex;align-items:center;justify-content:center;gap:1rem;background:#1f2937}
+    button{padding:.5rem 1rem;border:none;border-radius:.25rem;background:#3b82f6;color:#fff;cursor:pointer}
+  </style>
+</head>
+<body>
+<div id="chart"></div>
+<div id="controls">
+  <button id="nextBtn">Next Candle (Space)</button>
+</div>
+
+<script>
+(async () => {
+  const SEQ_LEN = 30;
+  const chart   = LightweightCharts.createChart(document.getElementById('chart'),{
+      layout:{background:{type:'solid',color:'transparent'},textColor:'#d1d5db'},
+      grid:{vertLines:{color:'#374151'},horzLines:{color:'#374151'}}
+  });
+  /* v5 API */
+  const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries,{
+      upColor:'#22c55e',downColor:'#ef4444',borderVisible:false
+  });
+  const lineSeries   = chart.addSeries(LightweightCharts.LineSeries,{
+      color:'#f59e0b',lineWidth:1,priceLineVisible:false
+  });
+
+  let allCandles = [];
+  let idx        = SEQ_LEN - 1;
+  let predLine   = null;
+
+  allCandles = await fetch('/candles').then(r => r.json());
+  candleSeries.setData(allCandles.slice(0, idx + 1));
+  chart.timeScale().fitContent();
+
+  async function nextCandle() {
+    if (idx >= allCandles.length - 1) return;
+    idx++;
+    const {line, price} = await fetch('/predict',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({idx})
+    }).then(r => r.json());
+
+    candleSeries.update(allCandles[idx]);
+    chart.timeScale().scrollToPosition(0,false);
+
+    if (predLine) candleSeries.removePriceLine(predLine);
+    if (line) predLine = candleSeries.createPriceLine({price,color:'#f59e0b',lineWidth:1,lineStyle:2});
+  }
+
+  document.getElementById('nextBtn').addEventListener('click', nextCandle);
+  document.addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); nextCandle(); }});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>OHLCV - XGBoost Live Predictions</title>
+
+<!-- Lightweight Charts v4 -->
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+
+<style>
+  body { background:#1e222d; color:#d1d4dc; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto, sans-serif; margin:20px; }
+  #chart { height:500px; border:1px solid #2a2e39; border-radius:6px; margin-bottom:12px; }
+  .controls { margin-bottom:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  button { padding:8px 14px; background:#2962ff; color:white; border:none; border-radius:6px; cursor:pointer; }
+  button:disabled { opacity:0.5; cursor:not-allowed; }
+  .csv-display { background:#2a2e39; padding:10px; border-radius:6px; max-height:220px; overflow:auto; font-family:monospace; font-size:13px; white-space:pre; }
+  .info { display:flex; gap:14px; margin-bottom:8px; flex-wrap:wrap; }
+  .info div { background:#23272e; padding:8px 10px; border-radius:6px; }
+</style>
+</head>
+<body>
+
+  <h2>OHLCV — XGBoost Live Predictions</h2>
+
+  <div class="controls">
+    <button id="startBtn">Load candles from server</button>
+    <button id="nextBtn" disabled>Next Candle (Space)</button>
+    <button id="exportBtn" disabled>Export CSV</button>
+  </div>
+
+  <div class="info">
+    <div>Current Candle: <span id="currentCandle">-</span></div>
+    <div>Close Price: <span id="closePrice">-</span></div>
+    <div>Predicted: <span id="predictedLabel">-</span></div>
+  </div>
+
+  <div id="chart"></div>
+
+  <h4>CSV log (last lines)</h4>
+  <div class="csv-display" id="csvLog"></div>
+
+<script>
+(async () => {
+  // Chart setup
+  const container = document.getElementById('chart');
+  const chart = LightweightCharts.createChart(container, {
+    layout: { background: { color: '#131722' }, textColor: '#d1d4dc' },
+    grid: { vertLines: { color: '#2a2e39' }, horzLines: { color: '#2a2e39' } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: { borderColor: '#2a2e39' },
+    timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: false }
+  });
+
+  const candleSeries = chart.addCandlestickSeries({
+    upColor: '#26a69a', downColor: '#ef5350', borderVisible:false,
+    wickUpColor:'#26a69a', wickDownColor:'#ef5350'
+  });
+
+  // UI elements
+  const startBtn = document.getElementById('startBtn');
+  const nextBtn  = document.getElementById('nextBtn');
+  const exportBtn = document.getElementById('exportBtn');
+  const currentCandleEl = document.getElementById('currentCandle');
+  const closePriceEl = document.getElementById('closePrice');
+  const predictedLabelEl = document.getElementById('predictedLabel');
+  const csvLogEl = document.getElementById('csvLog');
+
+  // Data state
+  let allRows = [];      // array of {time,open,high,low,close}
+  let currentIndex = 0;  // index of the current (rightmost) candle we are labeling
+  let logged = [];       // csv lines: "timestamp,close,label"
+  let predictedMarkers = []; // markers array for candlestickSeries.setMarkers
+
+  // Fetch candles from server
+  async function loadCandles() {
+    startBtn.disabled = true;
+    startBtn.textContent = 'Loading...';
+    try {
+      const res = await fetch('/candles');
+      if (!res.ok) throw new Error('Failed to fetch /candles');
+      const data = await res.json();
+      // Expect data array of { time, open, high, low, close } where time is unix seconds
+      allRows = data.map(r => ({
+        time: r.time,
+        open: +r.open,
+        high: +r.high,
+        low:  +r.low,
+        close:+r.close
+      }));
+
+      if (allRows.length === 0) throw new Error('No candles returned');
+
+      // Initialize chart with first candle only (progressive load)
+      currentIndex = 0;
+      candleSeries.setData([allRows[0]]);
+      updateDisplay();
+      predictedMarkers = [];
+      candleSeries.setMarkers([]);
+      nextBtn.disabled = false;
+      exportBtn.disabled = false;
+      startBtn.textContent = 'Loaded';
+    } catch (err) {
+      console.error(err);
+      alert('Error loading candles: ' + err.message);
+      startBtn.disabled = false;
+      startBtn.textContent = 'Load candles from server';
+    }
+  }
+
+  // Update UI display
+  function updateDisplay() {
+    if (!allRows.length) return;
+    const c = allRows[currentIndex];
+    currentCandleEl.textContent = unixToStr(c.time);
+    closePriceEl.textContent = `$${c.close.toFixed(2)}`;
+    predictedLabelEl.textContent = '-';
+  }
+
+  // Convert unix seconds to readable timestamp
+  function unixToStr(t) {
+    return new Date(t * 1000).toISOString().slice(0,19).replace('T',' ');
+  }
+
+  // Append marker for a predicted label at a candle index
+  function addPredictionMarker(idx, label) {
+    // position markers as simple aboveBar; keep them all in the markers array
+    predictedMarkers.push({
+      time: allRows[idx].time,
+      position: 'aboveBar',
+      color: '#ff6b35',
+      shape: 'circle',
+      text: String(label)
+    });
+    candleSeries.setMarkers(predictedMarkers);
+  }
+
+  // When pressing Next: request prediction for currentIndex (if server can), log it, then advance.
+  async function nextCandle() {
+    if (currentIndex >= allRows.length - 1) {
+      alert('Reached end of dataset');
+      nextBtn.disabled = true;
+      return;
+    }
+
+    // Try to get prediction for current index; server might require idx >= n_candles
+    let predicted = '0';
+    try {
+      const res = await fetch('/predict', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idx: currentIndex })
+      });
+      if (res.ok) {
+        const j = await res.json();
+        if (j && j.class !== undefined && j.class !== null) {
+          predicted = String(j.class);
+          predictedLabelEl.textContent = predicted;
+        } else {
+          // if server returns something unexpected
+          predicted = '0';
+        }
+      } else {
+        // server may return 400 if not enough candles — treat as '0'
+        predicted = '0';
+      }
+    } catch (err) {
+      console.warn('Prediction failed:', err);
+      predicted = '0';
+    }
+
+    // Log the result for this candle (use timestamp and close)
+    const c = allRows[currentIndex];
+    logged.push(`${unixToStr(c.time)},${c.close},${predicted}`);
+    updateCSVLog();
+
+    // If predicted label is not '0', add marker for that candle
+    if (predicted !== '0') {
+      addPredictionMarker(currentIndex, predicted);
+    }
+
+    // Advance to next candle (append)
+    currentIndex++;
+    candleSeries.update(allRows[currentIndex]);
+
+    // Keep visible window: shift time range to show context (not required, but helpful)
+    const vr = chart.timeScale().getVisibleRange();
+    if (vr) {
+      const rangeSize = vr.to - vr.from;
+      let newFrom = vr.from + 1;
+      let newTo = vr.to + 1;
+      // clamp
+      if (newTo > allRows[allRows.length - 1].time) {
+        newTo = allRows[allRows.length - 1].time;
+        newFrom = newTo - rangeSize;
+      }
+      chart.timeScale().setVisibleRange({ from: newFrom, to: newTo });
+    }
+
+    // update display
+    updateDisplay();
+  }
+
+  function updateCSVLog() {
+    const last = logged.slice(-15).join('\n');
+    csvLogEl.textContent = last;
+  }
+
+  function exportCSV() {
+    if (logged.length === 0) {
+      alert('No predictions logged');
+      return;
+    }
+    const header = 'timestamp,close,label\n';
+    const blob = new Blob([header + logged.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'xgb_predictions.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Key handling (Space -> next)
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && !e.repeat) {
+      e.preventDefault();
+      if (!nextBtn.disabled) nextCandle();
+    }
+  });
+
+  // Wire UI
+  startBtn.addEventListener('click', loadCandles);
+  nextBtn.addEventListener('click', nextCandle);
+  exportBtn.addEventListener('click', exportCSV);
+
+  // If you prefer auto-load on open, uncomment:
+  // await loadCandles();
+
+})();
+</script>
+</body>
+</html>

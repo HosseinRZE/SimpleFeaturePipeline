@@ -1,0 +1,138 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>XGBoost Predictor</title>
+  <script src="https://unpkg.com/lightweight-charts@5.0.8/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    html,body{height:100%;margin:0;background:#111827;color:#f3f4f6;font-family:system-ui}
+    #chart{height:calc(100% - 3rem)}
+    #controls{height:3rem;display:flex;align-items:center;justify-content:center;gap:1rem;background:#1f2937}
+    button{padding:.5rem 1rem;border:none;border-radius:.25rem;background:#3b82f6;color:#fff;cursor:pointer}
+  </style>
+</head>
+<body>
+<div id="chart"></div>
+<div id="controls">
+  <button id="nextBtn">Next Candle (Space)</button>
+</div>
+<div id="infoBox"
+     style="position:absolute; top:10px; left:10px; z-index:1000;
+            padding:8px 12px; background:rgba(0,0,0,.7); color:#fff;
+            border-radius:4px; font-family:monospace; font-size:13px;
+            line-height:1.4; display:none;">
+    <div>P: <span id="probText">-</span></div>
+    <div>Line: <span id="priceText">-</span></div>
+</div>
+
+<script>
+const SEQ_LEN = 3;
+
+function hideInfo() {
+    document.getElementById('infoBox').style.display = 'none';
+}
+/* ---------- create chart ---------- */
+const chart = LightweightCharts.createChart(
+    document.getElementById('chart'),
+    {
+        width:  window.innerWidth,
+        height: window.innerHeight - 50,
+        layout: {
+            background: { type: 'solid', color: '#111827' },
+            textColor:  '#d1d5db'
+        },
+        grid: {
+            vertLines: { color: '#374151' },
+            horzLines: { color: '#374151' }
+        }
+    }
+);
+
+const lineSeries = chart.addSeries(
+    LightweightCharts.LineSeries,
+    {
+        color: '#facc15',
+        lineWidth: 2,
+        lineStyle: LightweightCharts.LineStyle.LargeDashed,
+        priceLineVisible: true,
+        lastValueVisible: true,
+        crosshairMarkerVisible: false
+    }
+);
+const candleSeries = chart.addSeries(
+    LightweightCharts.CandlestickSeries,
+    { upColor: '#22c55e', downColor: '#ef4444', borderVisible: false }
+);
+
+
+
+/* ---------- state ---------- */
+let allCandles = [];
+let nextIdx    = SEQ_LEN ;   // index of the candle to add next
+
+/* ---------- initial load ---------- */
+fetch('/candles')
+    .then(r => r.json())
+    .then(data => {
+        allCandles = data;
+        candleSeries.setData(allCandles.slice(0, SEQ_LEN));
+        chart.timeScale().fitContent();
+    });
+
+/* ---------- advance one candle ---------- */
+let predictionLine = null;
+
+function advanceOneCandle() {
+    if (nextIdx >= allCandles.length) {
+        alert("End of data");
+        return;
+    }
+
+    candleSeries.update(allCandles[nextIdx]);
+
+    fetch('/predict', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idx: nextIdx })
+    })
+    .then(r => r.json())
+    .then(({ prob, price }) => {
+        // Remove any old line first
+        if (predictionLine) {
+            candleSeries.removePriceLine(predictionLine);
+            predictionLine = null;
+        }
+
+        if (prob >= 0.5) {
+            predictionLine = candleSeries.createPriceLine({
+                price: price,
+                color: '#facc15',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.LargeDashed,
+                axisLabelVisible: true
+            });
+        }
+
+        // ✅ Always show info regardless of prob
+        showInfo(prob, price);
+    });
+
+    nextIdx += 1;
+}
+
+function showInfo(prob, price) {
+    const box = document.getElementById('infoBox');
+    document.getElementById('probText').textContent = prob.toFixed(3);
+    document.getElementById('priceText').textContent = price.toFixed(2);
+    box.style.display = 'block';
+}
+
+/* ---------- controls ---------- */
+document.getElementById('nextBtn').onclick = advanceOneCandle;
+document.addEventListener('keydown', e => {
+    if (e.code === 'Space') { e.preventDefault(); advanceOneCandle(); }
+});
+
+</script>
+</body>
+</html>

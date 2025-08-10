@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive OHLCV Chart</title>
+    
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1e222d;
+            color: #d1d4dc;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            background: #2962ff;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+        button:hover:not(:disabled) {
+            background: #1e4bd2;
+        }
+        button:disabled {
+            background: #434651;
+            cursor: not-allowed;
+        }
+        #chart {
+            border: 1px solid #2a2e39;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        .info {
+            background: #2a2e39;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        .info-item {
+            margin: 5px 0;
+            font-size: 14px;
+        }
+        .csv-display {
+            background: #2a2e39;
+            padding: 15px;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre;
+        }
+        .file-input {
+            margin-bottom: 10px;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .file-label {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #434651;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .file-label:hover {
+            background: #535661;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Interactive OHLCV Chart</h1>
+            <div class="controls">
+                <label class="file-label">
+                    <input type="file" id="csvFile" accept=".csv">
+                    Load CSV
+                </label>
+                <button id="undoBtn" disabled>Undo Line</button>
+                <button id="nextBtn" disabled>Next Candle</button>
+                <button id="exportBtn" disabled>Export CSV</button>
+            </div>
+            <div style="margin-top:8px;">
+                <label>Start from:
+                    <input type="datetime-local" id="startTime" step="1">
+                    <button id="jumpBtn">Jump</button>
+                </label>
+            </div>
+        </div>
+        
+        <div class="info">
+            <div class="info-item">Current Candle: <span id="currentCandle">-</span></div>
+            <div class="info-item">Close Price: <span id="closePrice">-</span></div>
+            <div class="info-item">Lines: <span id="lineCount">0</span></div>
+        </div>
+        
+        <div id="chart" style="height: 500px;"></div>
+        
+        <div>
+            <h3>CSV Log:</h3>
+            <div class="csv-display" id="csvLog"></div>
+        </div>
+    </div>
+    <script>
+        let candlestickSeries, csvData = [], horizontalLines = [];
+        let allRows = [];          // raw parsed rows (preview 100)
+        let visibleData = [];      // rows actually shown on chart
+        let currentIndex = 0;      // index into allRows
+        let isFinished = false;    // keeps the old logic
+        let csvLoaded = false;
+        const chartContainer = document.getElementById('chart');
+        const chart = LightweightCharts.createChart(chartContainer, {
+            width: chartContainer.clientWidth,
+            height: 500,
+            layout: {
+                background: { color: '#131722' },
+                textColor: '#d1d4dc',
+            },
+            grid: {
+                vertLines: { color: '#2a2e39' },
+                horzLines: { color: '#2a2e39' },
+            },
+            crosshair: {
+                mode: LightweightCharts.CrosshairMode.Normal,
+            },
+            rightPriceScale: {
+                borderColor: '#2a2e39',
+            },
+            timeScale: {
+                borderColor: '#2a2e39',
+                timeVisible: true,
+                secondsVisible: false,
+            },
+        });
+
+        candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+            upColor: '#26a69a',
+            downColor: '#ef5350',
+            borderVisible: false,
+            wickUpColor: '#26a69a',
+            wickDownColor: '#ef5350',
+        });
+
+        function resizeChart() {
+            chart.applyOptions({ width: chartContainer.clientWidth });
+        }
+        window.addEventListener('resize', resizeChart);
+
+        document.getElementById('csvFile').addEventListener('change', handleFileSelect);
+        document.getElementById('undoBtn').addEventListener('click', undoLastLine);
+        document.getElementById('nextBtn').addEventListener('click', nextCandle);
+        document.getElementById('exportBtn').addEventListener('click', exportCSV);
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            Papa.parse(file, {
+                header: true,
+                dynamicTyping: true,
+                skipEmptyLines: true,
+                complete: results => {
+                    allRows = results.data
+                        .filter(r => r.timestamp && r.open != null)
+                        .map(r => ({
+                            time : new Date(r.timestamp).getTime() / 1000,
+                            open : r.open, high: r.high, low: r.low, close: r.close, volume: r.volume || 0
+                        }));
+
+                    if (allRows.length === 0) { alert('No valid rows'); return; }
+
+                    visibleData = [allRows[0]];          // start with candle 0
+                    candlestickSeries.setData(visibleData);
+                    // ---------- click handler to add a horizontal price line ----------
+                    chart.subscribeCrosshairMove(param => {
+                        if (!param || !param.point) return;
+                        chartContainer.style.cursor = 'crosshair';
+                    });
+
+                    chart.subscribeClick(param => {
+                        if (!param || !param.point) return;
+
+                        // v3 & v4 compatible
+                        const price = candlestickSeries.coordinateToPrice(param.point.y);
+                        if (price !== null) {
+                            addHorizontalLine(price);
+                        }
+                    });
+
+                    chart.timeScale().setVisibleRange({ from: visibleData[0].time, to: visibleData[0].time + 60 });
+
+                    currentIndex = 0;
+                    csvData = [];
+                    horizontalLines = [];
+                    isFinished = false;
+                    updateDisplay();
+                    document.getElementById('nextBtn').disabled = false;
+                    document.getElementById('exportBtn').disabled = false;
+                }
+            });
+        }
+
+        function parseCSV(csvText) {
+            const lines = csvText.trim().split('\n');
+            if (lines.length < 2) {
+                alert('Empty or invalid CSV file');
+                return;
+            }
+
+            data = [];
+            const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+            
+            for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(',').map(v => v.trim());
+                if (values.length < 6) continue;
+
+                const row = {};
+                headers.forEach((header, idx) => {
+                    if (header === 'timestamp') {
+                        row.time = new Date(values[idx]).getTime() / 1000;
+                    } else if (['open', 'high', 'low', 'close', 'volume'].includes(header)) {
+                        row[header] = parseFloat(values[idx]) || 0;
+                    }
+                });
+
+                if (row.time && row.open && row.high && row.low && row.close) {
+                    data.push(row);
+                }
+            }
+
+            if (data.length === 0) {
+                alert('No valid data found in CSV');
+                return;
+            }
+
+            candlestickSeries.setData(data);
+            chart.timeScale().fitContent();
+            
+            currentIndex = 0;
+            isFinished = false;
+            csvData = [];
+            horizontalLines = [];
+            
+            updateDisplay();
+            document.getElementById('nextBtn').disabled = false;
+            document.getElementById('exportBtn').disabled = false;
+        }
+
+
+        function addHorizontalLine(price) {
+            const line = candlestickSeries.createPriceLine({
+                price: price,
+                color: '#ff6b35',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                axisLabelVisible: true,
+                title: `$${price.toFixed(2)}`,
+            });
+            
+            horizontalLines.push({ line, price });
+            updateDisplay();
+            document.getElementById('undoBtn').disabled = false;
+        }
+
+        function undoLastLine() {
+            if (horizontalLines.length === 0) return;
+            
+            const lastLine = horizontalLines.pop();
+            candlestickSeries.removePriceLine(lastLine.line);
+            
+            updateDisplay();
+            if (horizontalLines.length === 0) {
+                document.getElementById('undoBtn').disabled = true;
+            }
+        }
+
+        function nextCandle() {
+            if (currentIndex >= allRows.length - 1) {
+                isFinished = true;
+                alert('Dataset finished!');
+                document.getElementById('nextBtn').disabled = true;
+                return;
+            }
+            
+
+            const candle = allRows[currentIndex];
+            const ratios = horizontalLines.map(l => (l.price / candle.close).toFixed(4));
+            const ratioStr = ratios.length ? `(${ratios.join(',')})` : '(-1)';
+            csvData.push(`${formatTimestamp(candle.time * 1000)},${candle.close},${ratioStr}`);
+            updateCSVLog();
+
+            horizontalLines.forEach(l => candlestickSeries.removePriceLine(l.line));
+            horizontalLines = [];
+            document.getElementById('undoBtn').disabled = true;
+
+            currentIndex++;
+            visibleData.push(allRows[currentIndex]);
+            candlestickSeries.update(allRows[currentIndex]);
+            updateDisplay();
+        }
+
+        function updateDisplay() {
+            if (visibleData.length === 0) return;
+            const candle = visibleData[visibleData.length - 1]; // last visible candle
+            document.getElementById('currentCandle').textContent = formatTimestamp(candle.time * 1000);
+            document.getElementById('closePrice').textContent = `$${candle.close.toFixed(2)}`;
+            document.getElementById('lineCount').textContent = horizontalLines.length;
+        }
+
+        function formatTimestamp(timestamp) {
+            const date = new Date(timestamp);
+            return date.toISOString().slice(0, 19).replace('T', ' ');
+        }
+
+        function updateCSVLog() {
+            const last5 = csvData.slice(-5);
+            document.getElementById('csvLog').textContent = last5.join('\n');
+        }
+
+        function exportCSV() {
+            if (csvData.length === 0) {
+                alert('No data to export');
+                return;
+            }
+            
+            const csvContent = csvData.join('\n');
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'ohlcv_log.csv';
+            a.click();
+            window.URL.revokeObjectURL(url);
+        }
+
+        // Load from localStorage if available
+        const savedData = localStorage.getItem('ohlcvData');
+        const savedCsvData = localStorage.getItem('ohlcvCsvData');
+        const savedIndex = localStorage.getItem('ohlcvCurrentIndex');
+        
+        if (savedData && savedCsvData) {
+            try {
+                data = JSON.parse(savedData);
+                csvData = JSON.parse(savedCsvData);
+                currentIndex = parseInt(savedIndex) || 0;
+                
+                if (data.length > 0) {
+                    candlestickSeries.setData(data);
+                    chart.timeScale().setVisibleRange({
+    from: data[0].time,
+    to: data[Math.min(data.length - 1, data[0].time + 300 * 60)] // 300 bars
+});
+                    chart.timeScale().fitContent();
+                    updateDisplay();
+                    updateCSVLog();
+                    document.getElementById('nextBtn').disabled = false;
+                    document.getElementById('exportBtn').disabled = false;
+                }
+            } catch (e) {
+                console.error('Error loading saved data:', e);
+            }
+        }
+    document.addEventListener('keydown', e => {
+        if (e.code === 'Space' && !e.repeat) {
+            e.preventDefault();      // stop page scroll
+            nextCandle();
+        }
+    });
+    document.getElementById('jumpBtn').addEventListener('click', () => {
+        const raw = document.getElementById('startTime').value;
+        if (!raw) return;
+        const target = new Date(raw).getTime() / 1000;
+
+        const idx = allRows.findIndex(d => d.time >= target);
+        if (idx === -1) { alert('Timestamp not found'); return; }
+
+        // reset to that candle
+        currentIndex = idx;
+        visibleData = [allRows[idx]];
+        csvData = [];
+        horizontalLines.forEach(l => candlestickSeries.removePriceLine(l.line));
+        horizontalLines = [];
+        document.getElementById('undoBtn').disabled = true;
+
+        candlestickSeries.setData(visibleData);
+        chart.timeScale().setVisibleRange({
+            from: visibleData[0].time,
+            to  : visibleData[0].time + 60
+        });
+        updateDisplay();
+    });
+      
+    </script>
+</body>
+</html>
