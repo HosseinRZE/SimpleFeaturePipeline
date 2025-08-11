@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>ZigZag Backward Chart</title>
+<script src="https://unpkg.com/lightweight-charts@4.0.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  #chart {
+    width: 900px;
+    height: 500px;
+  }
+</style>
+</head>
+<body>
+<div id="chart"></div>
+
+<script>
+const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+  width: 900, height: 600,
+});
+const candleSeries = chart.addCandlestickSeries();
+const zigzagSeries = chart.addLineSeries({ color: 'blue', lineWidth: 2 });
+
+let allCandles = [];
+
+// Fetch one step (space press)
+async function fetchStep() {
+  try {
+    const res = await fetch('/data');
+    const data = await res.json();
+
+    // ---------- candles: accumulate & draw ----------
+    // Ensure unique candles by time, then sort ascending
+    data.candles.forEach(c => { if (!allCandles.some(x => x.time === c.time)) allCandles.push(c); });
+    allCandles.sort((a,b) => a.time - b.time);
+    candleSeries.setData(allCandles);
+
+    // ---------- zigzag: REPLACE entirely with server-sent list ----------
+    // Expect server to return the full current pivot list (not just diffs)
+    if (Array.isArray(data.zigzag) && data.zigzag.length > 0) {
+      // Optional: normalize fields just in case
+      const pivots = data.zigzag.map(z => ({ time: Number(z.time), value: Number(z.value) }));
+      pivots.sort((a,b) => a.time - b.time);
+      zigzagSeries.setData(pivots);
+    } else {
+      // If server currently has no pivots, clear the series (prevents ghost pivots)
+      zigzagSeries.setData([]);
+    }
+
+    console.debug('candles:', allCandles.length, 'pivots:', (data.zigzag||[]).length);
+  } catch (err) {
+    console.error('fetchStep error', err);
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); fetchStep(); }
+});
+
+// initial load
+fetchStep();
+</script>
+</body>
+</html>

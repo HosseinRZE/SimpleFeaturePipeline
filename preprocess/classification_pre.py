@@ -2,22 +2,6 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
 
-def compute_candle_features(df):
-    """
-    Assumes df has columns: 'open', 'high', 'low', 'close'
-    Adds 6 extra candle features.
-    """
-    df['upper_shadow'] = df['high'] - np.maximum(df['close'], df['open'])
-    df['lower_shadow'] = np.minimum(df['close'], df['open']) - df['low']
-    df['body'] = (df['close'] - df['open']).abs()
-
-    body_range = df['body'].replace(0, 1e-6)  # avoid division by zero
-    df['upper_body_ratio'] = df['upper_shadow'] / body_range
-    df['lower_body_ratio'] = df['lower_shadow'] / body_range
-    df['Candle_Color'] = np.where(df['close'] > df['open'], 1, 0)
-
-    return df
-
 def create_supervised(df, n_candles=3):
     """
     Converts sequence of candles into X, y for supervised learning.
@@ -48,9 +32,6 @@ def preprocess_csv(csv_path, n_candles=3):
         df['high'] = df['close']
         df['low'] = df['close']
     
-    # Compute candle features
-    df = compute_candle_features(df)
-
     # Create supervised dataset
     X, y = create_supervised(df, n_candles)
 
