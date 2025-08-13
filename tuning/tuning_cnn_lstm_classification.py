@@ -3,7 +3,8 @@ import torch
 import psutil
 from ray import tune
 from ray.tune.schedulers import ASHAScheduler
-from trainer.train_lstm_classification import train_model
+from trainer.train_cnn_lstm_classification import train_model
+
 
 def resource_usage():
     """Print current CPU, RAM, and GPU usage."""
@@ -19,7 +20,8 @@ def resource_usage():
         pass
     print(usage)
 
-def train_lstm_tune(config):
+
+def train_cnn_lstm_tune(config):
     """
     Single Ray Tune trial.
     Args:
@@ -36,19 +38,23 @@ def train_lstm_tune(config):
         seq_len=config["seq_len"],
         hidden_dim=config["hidden_dim"],
         num_layers=config["num_layers"],
+        cnn_channels=config["cnn_channels"],
+        cnn_kernel_sizes=config["cnn_kernel_sizes"],
+        cnn_strides=config["cnn_strides"],
+        cnn_paddings=config["cnn_paddings"],
         lr=config["lr"],
         batch_size=config["batch_size"],
         max_epochs=config["max_epochs"],
-        return_val_accuracy=True,  # Returns {"accuracy": float, "loss": float, ...}
+        return_val_accuracy=True,  # Expects dict with "accuracy" and optionally "loss"
         save_model=False  # Never save during search
     )
 
     # Report metrics to Ray Tune
-    tune.report(metrics)
+    tune.report(**metrics)
 
 
 def run_tuning(save_model=True):
-    """Hyperparameter tuning for LSTM with Ray Tune."""
+    """Hyperparameter tuning for CNN LSTM with Ray Tune."""
 
     search_space = {
         "seq_len": tune.choice([3, 5, 7]),
@@ -56,25 +62,30 @@ def run_tuning(save_model=True):
         "num_layers": tune.choice([1, 2, 3]),
         "lr": tune.loguniform(1e-4, 1e-2),
         "batch_size": tune.choice([16, 32, 64]),
-        "max_epochs": tune.choice([5, 10, 15])
+        "max_epochs": tune.choice([5, 10, 15]),
+        # CNN knobs – keep all tuples the same length
+        "cnn_channels": tune.choice([(32,), (64,), (32, 64), (64, 32)]),
+        "cnn_kernel_sizes": tune.choice([(2,), (3,), (2, 2), (3, 3)]),
+        "cnn_strides": tune.choice([(1,), (1, 1)]),
+        "cnn_paddings": tune.choice([(0,), (0, 0)]),
     }
 
     scheduler = ASHAScheduler(
-        metric="accuracy",
+        metric="accuracy",  # must exist in metrics dict from train_model
         mode="max",
         grace_period=1,
         reduction_factor=2
     )
 
     tuner = tune.Tuner(
-        train_lstm_tune,
+        train_cnn_lstm_tune,
         param_space=search_space,
         tune_config=tune.TuneConfig(
             scheduler=scheduler,
             num_samples=10
         ),
         run_config=tune.RunConfig(
-            name="lstm_tuning",
+            name="cnn_lstm_tuning",
             verbose=1
         )
     )
@@ -97,11 +108,16 @@ def run_tuning(save_model=True):
             seq_len=best_result.config["seq_len"],
             hidden_dim=best_result.config["hidden_dim"],
             num_layers=best_result.config["num_layers"],
+            cnn_channels=best_result.config["cnn_channels"],
+            cnn_kernel_sizes=best_result.config["cnn_kernel_sizes"],
+            cnn_strides=best_result.config["cnn_strides"],
+            cnn_paddings=best_result.config["cnn_paddings"],
             lr=best_result.config["lr"],
             batch_size=best_result.config["batch_size"],
             max_epochs=best_result.config["max_epochs"],
             save_model=True
         )
+
 
 if __name__ == "__main__":
     run_tuning(save_model=True)
