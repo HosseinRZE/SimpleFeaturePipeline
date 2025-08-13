@@ -8,7 +8,8 @@ import pytorch_lightning as pl
 
 SEQ_LEN = 3
 
-df = load_raw_data_serve("data/candles.csv", "data/labels.csv")
+df = load_raw_data_serve("/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles_prop.csv",
+                         "/home/iatell/projects/meta-learning/data/labeled_ohlcv_string.csv")
 X, y, label_encoder = prepare_sequences(df, seq_len=SEQ_LEN)
 
 dataset = TensorDataset(torch.tensor(X), torch.tensor(y))

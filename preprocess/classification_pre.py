@@ -1,47 +1,89 @@
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import LabelEncoder
+import torch
+from torch.utils.data import TensorDataset
+from sklearn.model_selection import train_test_split
+
+FEATURE_COLS = [
+    'open', 'high', 'low', 'close',
+    'upper_shadow', 'body', 'lower_shadow',
+    'upper_body_ratio', 'lower_body_ratio', 'Candle_Color'
+]
 
 def create_supervised(df, n_candles=3):
-    """
-    Converts sequence of candles into X, y for supervised learning.
-    Keeps only rows where label is not NaN.
-    """
-    feature_cols = ['open','high','low','close',
-                    'upper_shadow','body','lower_shadow',
-                    'upper_body_ratio','lower_body_ratio','Candle_Color']
-
     X, y = [], []
     for i in range(n_candles, len(df)):
-        if pd.notna(df.loc[i, 'label']):  # only if this row has a label
-            past_candles = df.loc[i-n_candles:i-1, feature_cols].values.flatten()
-            X.append(past_candles)
+        if pd.notna(df.loc[i, 'label']):  # only if label exists
+            past_candles = df.loc[i-n_candles:i-1, FEATURE_COLS].values
+            X.append(past_candles)  # shape: (n_candles, feature_dim)
             y.append(df.loc[i, 'label'])
-
     return np.array(X), np.array(y)
 
-def preprocess_csv(csv_path, n_candles=3):
+
+def preprocess_csv(data_csv, labels_csv, n_candles=3, val_split=False, test_size=0.2, random_state=42):
     """
-    Full preprocessing pipeline: load, feature engineer, supervised, label encode.
+    Preprocesses when OHLC data and labels are in separate CSVs.
+    If val_split=True, returns (train_dataset, val_dataset, label_encoder, merged_df).
+    Otherwise returns (dataset, label_encoder, merged_df).
     """
-    df = pd.read_csv(csv_path)
-    
-    # If only timestamp, close, label → fill dummy OHLC for now
-    if not all(col in df.columns for col in ['open','high','low','close']):
-        df['open'] = df['close']
-        df['high'] = df['close']
-        df['low'] = df['close']
-    
-    # Create supervised dataset
+    # Load OHLC
+    df_data = pd.read_csv(data_csv)
+    if not all(col in df_data.columns for col in ['open', 'high', 'low', 'close']):
+        df_data['open'] = df_data['close']
+        df_data['high'] = df_data['close']
+        df_data['low'] = df_data['close']
+
+    # Load labels
+    df_labels = pd.read_csv(labels_csv).rename(columns={'labels': 'label'})
+
+    # Align timestamps
+    df_data['timestamp'] = pd.to_datetime(df_data['timestamp'])
+    df_labels['timestamp'] = pd.to_datetime(df_labels['timestamp'])
+
+    # Merge
+    df = pd.merge(df_data, df_labels[['timestamp', 'label']], on='timestamp', how='left')
+
+    # Supervised dataset
     X, y = create_supervised(df, n_candles)
 
-    # Encode labels to integers (0..N-1)
     label_encoder = LabelEncoder()
     y_encoded = label_encoder.fit_transform(y)
 
-    return X, y_encoded, label_encoder
+    if val_split:
+        X_train, X_val, y_train, y_val = train_test_split(
+            X, y_encoded, test_size=test_size, random_state=random_state, stratify=y_encoded
+        )
+        train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32),
+                                      torch.tensor(y_train, dtype=torch.long))
+        val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32),
+                                    torch.tensor(y_val, dtype=torch.long))
+        return train_dataset, val_dataset, label_encoder, df
+    else:
+        X_tensor = torch.tensor(X, dtype=torch.float32)
+        y_tensor = torch.tensor(y_encoded, dtype=torch.long)
+        dataset = TensorDataset(X_tensor, y_tensor)
+        return dataset, label_encoder, df
 
-if __name__ == "__main__":
-    X, y, le = preprocess_csv("labeled_data.csv")
-    print("X shape:", X.shape)
-    print("y classes:", le.classes_)
+def load_raw_data_serve(data_csv, labels_csv):
+    """
+    Server version — only loads and merges, does not encode or sequence.
+    """
+    df_data = pd.read_csv(data_csv)
+    if not all(col in df_data.columns for col in ['open', 'high', 'low', 'close']):
+        df_data['open'] = df_data['close']
+        df_data['high'] = df_data['close']
+        df_data['low'] = df_data['close']
+
+    df_labels = pd.read_csv(labels_csv).rename(columns={'labels': 'label'})
+    df_data['timestamp'] = pd.to_datetime(df_data['timestamp'])
+    df_labels['timestamp'] = pd.to_datetime(df_labels['timestamp'])
+
+    df = pd.merge(df_data, df_labels[['timestamp', 'label']], on='timestamp', how='left')
+    return df
+
+def one_sample(seq_df):
+    """
+    Given a slice of df, return (seq_len, feature_dim) array for LSTM.
+    """
+    return seq_df[FEATURE_COLS].values.astype(np.float32)

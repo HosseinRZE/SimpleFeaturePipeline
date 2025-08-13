@@ -3,14 +3,14 @@ import joblib
 import torch
 import numpy as np
 from flask import Flask, request, jsonify, render_template
-from preprocess import load_raw_data_serve, one_sample
+from preprocess.classification_pre import load_raw_data_serve, one_sample
 from models.LSTM.lstm_classifier import LSTMClassifier
 
 app = Flask(__name__)
 
 # ---------- Load meta & model once at start-up ----------
-meta_path = glob.glob("models/saved_models/lstm_meta_*.pkl")[0]
-state_path = glob.glob("models/saved_models/lstm_*.ckpt")[0]
+meta_path = glob.glob("models/saved_models/lstm_meta_class*.pkl")[0]
+state_path = glob.glob("models/saved_models/lstm_class*.pt")[0]
 
 meta = joblib.load(meta_path)
 
@@ -25,10 +25,8 @@ model.load_state_dict(torch.load(state_path, map_location='cpu')["state_dict"])
 model.eval()
 
 # ---------- Load candle data ----------
-df = load_raw_data_serve(
-    "/path/to/full_candles.csv",
-    "/path/to/labeled_dataset.csv"
-)
+df = load_raw_data_serve("/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles_prop.csv",
+"/home/iatell/projects/meta-learning/data/labeled_ohlcv_string.csv")
 
 # Keep track of chart index
 class State:
@@ -38,7 +36,7 @@ state = State()
 # ---------- Routes ----------
 @app.route("/")
 def home():
-    return render_template("chart_lstm.html")
+    return render_template("classification.html")
 
 @app.route("/candles")
 def candles():
@@ -53,21 +51,42 @@ def candles():
         for _, r in df.iterrows()
     ])
 
+# Add this route to send label mapping once
+@app.route("/meta")
+def meta_info():
+    return jsonify({
+        'label_classes': list(meta['label_classes'])
+    })
+
 @app.route("/predict", methods=['POST'])
 def predict():
     idx = request.json['idx']  # right-most candle index
+
+    # If not enough candles for a full sequence
+    if idx < meta['seq_len'] - 1:
+        return jsonify({
+            'error': f"Not enough candles to make prediction (need {meta['seq_len']}, got {idx+1})",
+            'class': None,
+            'logits': None,
+            'candle_time': None
+        }), 400
+
     seq_df = df.iloc[idx - meta['seq_len'] + 1: idx + 1]
     X_np = one_sample(seq_df)  # shape (seq_len, feature_dim)
     X_t = torch.from_numpy(X_np.astype(np.float32)).unsqueeze(0)  # (1, seq_len, feat)
 
     with torch.no_grad():
-        logits = model(X_t)
-        pred_class = torch.argmax(logits, dim=1).item()
+        logits_t = model(X_t)
+        pred_class = torch.argmax(logits_t, dim=1).item()
+        logits_list = logits_t.squeeze(0).tolist()
+
 
     return jsonify({
         'class': int(pred_class),
+        'logits': logits_list,
         'candle_time': int(seq_df.iloc[-1]['timestamp'].timestamp())
     })
+
 
 if __name__ == "__main__":
     app.run(debug=True)
