@@ -8,9 +8,6 @@ from datetime import datetime
 from preprocess.classification_pre import preprocess_csv
 from models.LSTM.lstm_classifier import LSTMClassifier
 
-
-SEQ_LEN = 3  # number of candles in sequence
-
 def evaluate_model(model, val_loader, label_encoder):
     """Generate classification report & confusion matrix."""
     model.eval()
@@ -30,14 +27,37 @@ def evaluate_model(model, val_loader, label_encoder):
     print("Confusion Matrix:")
     print(cm)
 
-
 def train_model(
     data_csv,
     labels_csv,
     model_out_dir="models/saved_models",
-    do_validation=False
+    do_validation=False,
+    seq_len=3,
+    hidden_dim=64,
+    num_layers=1,
+    lr=0.001,
+    batch_size=32,
+    max_epochs=10,
+    save_model=True,
+    return_val_accuracy=False
 ):
-    # --- Timestamp for unique filenames ---
+    """
+    Train an LSTM classification model.
+
+    Args:
+        data_csv (str): Path to candles CSV.
+        labels_csv (str): Path to labels CSV.
+        model_out_dir (str): Folder to save model & metadata.
+        do_validation (bool): Whether to split data for validation.
+        seq_len (int): Number of candles per sequence.
+        hidden_dim (int): LSTM hidden layer size.
+        num_layers (int): LSTM layer count.
+        lr (float): Learning rate.
+        batch_size (int): Training batch size.
+        max_epochs (int): Max training epochs.
+        save_model (bool): Save model & meta to disk.
+        return_val_accuracy (bool): If True, return validation accuracy.
+    """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_out = f"{model_out_dir}/lstm_model_class_{timestamp}.pt"
     meta_out  = f"{model_out_dir}/lstm_meta_class_{timestamp}.pkl"
@@ -45,20 +65,16 @@ def train_model(
     # --- Get dataset(s) ---
     if do_validation:
         train_ds, val_ds, label_encoder, df = preprocess_csv(
-            data_csv, labels_csv, n_candles=SEQ_LEN, val_split=True
+            data_csv, labels_csv, n_candles=seq_len, val_split=True
         )
     else:
         full_dataset, label_encoder, df = preprocess_csv(
-            data_csv, labels_csv, n_candles=SEQ_LEN, val_split=False
+            data_csv, labels_csv, n_candles=seq_len, val_split=False
         )
 
     # --- Model config ---
     input_dim = train_ds[0][0].shape[1] if do_validation else full_dataset[0][0].shape[1]
     num_classes = len(label_encoder.classes_)
-
-    hidden_dim = 64
-    num_layers = 1
-    lr = 0.001
 
     model = LSTMClassifier(
         input_dim=input_dim,
@@ -70,41 +86,52 @@ def train_model(
 
     # --- DataLoaders ---
     if do_validation:
-        train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
-        val_loader   = DataLoader(val_ds, batch_size=32)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+        val_loader   = DataLoader(val_ds, batch_size=batch_size)
     else:
-        train_loader = DataLoader(full_dataset, batch_size=32, shuffle=True)
+        train_loader = DataLoader(full_dataset, batch_size=batch_size, shuffle=True)
         val_loader   = None
 
-    # --- Trainer ---
+    #trainer
     trainer = pl.Trainer(
-        max_epochs=10,
-        accelerator="auto",
-        devices=1 if torch.cuda.is_available() else None,
-        log_every_n_steps=10
-    )
+    max_epochs=max_epochs,
+    accelerator="auto",
+    devices=1,  # always at least 1 device
+    log_every_n_steps=10
+)
+
     trainer.fit(model, train_loader, val_loader)
 
-    # --- Save model ---
-    trainer.save_checkpoint(model_out)
-
-    # --- Save meta info ---
-    joblib.dump({
-        'input_dim': input_dim,
-        'hidden_dim': hidden_dim,
-        'num_layers': num_layers,
-        'num_classes': num_classes,
-        'seq_len': SEQ_LEN,
-        'lr': lr,
-        'label_classes': label_encoder.classes_
-    }, meta_out)
-
-    print(f"\n✅ Model saved to {model_out}")
-    print(f"✅ Meta saved to {meta_out}")
+    # --- Save model & meta ---
+    if save_model:
+        trainer.save_checkpoint(model_out)
+        joblib.dump({
+            'input_dim': input_dim,
+            'hidden_dim': hidden_dim,
+            'num_layers': num_layers,
+            'num_classes': num_classes,
+            'seq_len': seq_len,
+            'lr': lr,
+            'label_classes': label_encoder.classes_
+        }, meta_out)
+        print(f"\n✅ Model saved to {model_out}")
+        print(f"✅ Meta saved to {meta_out}")
 
     # --- Optional evaluation ---
+    val_acc = None
     if do_validation:
-        evaluate_model(model, val_loader, label_encoder)
+        model.eval()
+        all_preds, all_labels = [], []
+        with torch.no_grad():
+            for X_batch, y_batch in val_loader:
+                logits = model(X_batch)
+                preds = torch.argmax(logits, dim=1)
+                all_preds.extend(preds.cpu().numpy())
+                all_labels.extend(y_batch.cpu().numpy())
+        val_acc = (torch.tensor(all_preds) == torch.tensor(all_labels)).float().mean().item()
+
+    if return_val_accuracy:
+        return {"accuracy": val_acc}
 
 
 if __name__ == "__main__":
