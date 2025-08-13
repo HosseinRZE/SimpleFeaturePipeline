@@ -1,59 +1,28 @@
 import glob
-import os
 import joblib
 import numpy as np
-import pandas as pd
 from flask import Flask, request, jsonify, render_template
-from xgboost import XGBClassifier
+from preprocess.classification_pre import load_raw_data_serve, one_sample
 
-from preprocess import compute_candle_features  # reuse from earlier code
-
-# -------------------
-# Flask app
-# -------------------
 app = Flask(__name__)
 
-# -------------------
-# 1. Load model + encoder at startup
-# -------------------
-MODEL_DIR = "models/saved_models"
-model_path = glob.glob(os.path.join(MODEL_DIR, "xgboost_candle_model.json"))[0]
-encoder_path = glob.glob(os.path.join(MODEL_DIR, "label_encoder.pkl"))[0]
+meta_path = glob.glob("models/saved_models/xgb_meta_class*.pkl")[0]
+model_path = glob.glob("models/saved_models/xgb_model_class*.pkl")[0]
 
-model = XGBClassifier()
-model.load_model(model_path)
-label_encoder = joblib.load(encoder_path)
+meta = joblib.load(meta_path)
+model = joblib.load(model_path)
 
-# -------------------
-# 2. Load candle CSV
-# -------------------
-CANDLE_CSV = "/path/to/your/full_ohlc_dataset.csv"  # should have timestamp, open, high, low, close
-df = pd.read_csv(CANDLE_CSV)
+df = load_raw_data_serve(
+    "data/Bitcoin_BTCUSDT_kaggle_1D_candles_prop.csv",
+    "data/labeled_ohlcv_string.csv"
+)
 
-# Ensure timestamp is datetime
-if not np.issubdtype(df['timestamp'].dtype, np.datetime64):
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-
-# Compute features
-df = compute_candle_features(df)
-
-# -------------------
-# 3. State to track current position
-# -------------------
-class State:
-    n_candles = 3  # model trained on last 3 candles
-state = State()
-
-# -------------------
-# ROUTES
-# -------------------
 @app.route("/")
 def home():
-    return render_template("chart.html")  # your chart HTML
+    return render_template("classification.html")
 
 @app.route("/candles")
 def candles():
-    """Send OHLC candles to browser."""
     return jsonify([
         {
             'time': int(r['timestamp'].timestamp()),
@@ -65,30 +34,35 @@ def candles():
         for _, r in df.iterrows()
     ])
 
-@app.route("/predict", methods=["POST"])
-def predict():
-    """Predict class for the candle at index `idx`."""
-    idx = request.json['idx']  # right-most candle on screen
-
-    if idx < state.n_candles:
-        return jsonify({'error': 'Not enough candles for prediction'}), 400
-
-    # Select last n_candles before idx
-    feature_cols = ['open','high','low','close',
-                    'upper_shadow','body','lower_shadow',
-                    'upper_body_ratio','lower_body_ratio','Candle_Color']
-
-    past_candles = df.iloc[idx - state.n_candles: idx][feature_cols].values.flatten().reshape(1, -1)
-
-    # Predict
-    proba = model.predict_proba(past_candles)[0]
-    pred_idx = np.argmax(proba)
-    pred_label = label_encoder.inverse_transform([pred_idx])[0]
-
+@app.route("/meta")
+def meta_info():
     return jsonify({
-        'class': str(pred_label),
-        'probabilities': {label: float(prob) for label, prob in zip(label_encoder.classes_, proba)}
+        'label_classes': list(meta['label_classes'])
     })
 
-if __name__ == '__main__':
+@app.route("/predict", methods=['POST'])
+def predict():
+    idx = request.json['idx']
+
+    if idx < meta['seq_len'] - 1:
+        return jsonify({
+            'error': f"Not enough candles (need {meta['seq_len']}, got {idx+1})",
+            'class': None,
+            'logits': None,
+            'candle_time': None
+        }), 400
+
+    seq_df = df.iloc[idx - meta['seq_len'] + 1: idx + 1]
+    X_np = one_sample(seq_df).flatten().reshape(1, -1)
+
+    pred_class = model.predict(X_np)[0]
+    logits_list = model.predict_proba(X_np)[0].tolist()
+
+    return jsonify({
+        'class': int(pred_class),
+        'logits': logits_list,
+        'candle_time': int(seq_df.iloc[-1]['timestamp'].timestamp())
+    })
+
+if __name__ == "__main__":
     app.run(debug=True)

@@ -1,46 +1,68 @@
-import os
 import joblib
-from xgboost import XGBClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
-from preprocess import preprocess_csv
+from datetime import datetime
+import xgboost as xgb
+from sklearn.metrics import classification_report, confusion_matrix
+from preprocess.classification_pre import preprocess_csv
 
-# Paths
-CSV_PATH = "labeled_data.csv"
-MODEL_DIR = "models/saved_models"
-MODEL_PATH = os.path.join(MODEL_DIR, "xgboost_candle_model.json")
-ENCODER_PATH = os.path.join(MODEL_DIR, "label_encoder.pkl")
+SEQ_LEN = 3
+def train_model_xgb(
+    data_csv,
+    labels_csv,
+    model_out_dir="models/saved_models",
+    do_validation=False
+):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    model_out = f"{model_out_dir}/xgb_model_class_{timestamp}.pkl"
+    meta_out  = f"{model_out_dir}/xgb_meta_class_{timestamp}.pkl"
 
-# Ensure save directory exists
-os.makedirs(MODEL_DIR, exist_ok=True)
+    if do_validation:
+        X_train, y_train, X_val, y_val, label_encoder, df = preprocess_csv(
+            data_csv, labels_csv, n_candles=SEQ_LEN, val_split=True, for_xgboost=True
+        )
+    else:
+        X_train, y_train, label_encoder, df = preprocess_csv(
+            data_csv, labels_csv, n_candles=SEQ_LEN, val_split=False, for_xgboost=True
+        )
+        X_val, y_val = None, None
 
-# Load and preprocess data
-X, y, label_encoder = preprocess_csv(CSV_PATH, n_candles=3)
+    model = xgb.XGBClassifier(
+        n_estimators=200,
+        max_depth=6,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        eval_metric="mlogloss",
+        use_label_encoder=False
+    )
 
-# Train/test split
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y
-)
+    if do_validation:
+        model.fit(
+            X_train, y_train,
+            eval_set=[(X_val, y_val)],
+            verbose=True
+        )
+    else:
+        model.fit(X_train, y_train)
 
-# Train XGBoost classifier
-model = XGBClassifier(
-    objective="multi:softprob",
-    eval_metric="mlogloss",
-    num_class=len(label_encoder.classes_),
-    n_estimators=300,
-    max_depth=6,
-    learning_rate=0.05,
-    subsample=0.8,
-    colsample_bytree=0.8
-)
-model.fit(X_train, y_train)
+    joblib.dump(model, model_out)
+    joblib.dump({
+        'seq_len': SEQ_LEN,
+        'label_classes': label_encoder.classes_
+    }, meta_out)
 
-# Evaluate
-y_pred = model.predict(X_test)
-print(classification_report(y_test, y_pred, target_names=label_encoder.classes_))
+    print(f"✅ Model saved to {model_out}")
+    print(f"✅ Meta saved to {meta_out}")
 
-# Save model and label encoder
-model.save_model(MODEL_PATH)
-joblib.dump(label_encoder, ENCODER_PATH)
-print(f"✅ Model saved to {MODEL_PATH}")
-print(f"✅ Label encoder saved to {ENCODER_PATH}")
+    if do_validation:
+        y_pred = model.predict(X_val)
+        print("\n📊 Validation Report:")
+        print(classification_report(y_val, y_pred, target_names=label_encoder.classes_))
+        print("Confusion Matrix:")
+        print(confusion_matrix(y_val, y_pred))
+
+if __name__ == "__main__":
+    train_model_xgb(
+        "data/Bitcoin_BTCUSDT_kaggle_1D_candles_prop.csv",
+        "data/labeled_ohlcv_string.csv",
+        do_validation=True
+    )

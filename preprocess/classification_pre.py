@@ -21,11 +21,19 @@ def create_supervised(df, n_candles=3):
     return np.array(X), np.array(y)
 
 
-def preprocess_csv(data_csv, labels_csv, n_candles=3, val_split=False, test_size=0.2, random_state=42):
+def preprocess_csv(
+    data_csv,
+    labels_csv,
+    n_candles=3,
+    val_split=False,
+    test_size=0.2,
+    random_state=42,
+    for_xgboost=False
+):
     """
     Preprocesses when OHLC data and labels are in separate CSVs.
-    If val_split=True, returns (train_dataset, val_dataset, label_encoder, merged_df).
-    Otherwise returns (dataset, label_encoder, merged_df).
+    If val_split=True, returns train/val sets + label_encoder + merged_df.
+    If for_xgboost=True, returns NumPy arrays instead of PyTorch datasets.
     """
     # Load OHLC
     df_data = pd.read_csv(data_csv)
@@ -44,26 +52,48 @@ def preprocess_csv(data_csv, labels_csv, n_candles=3, val_split=False, test_size
     # Merge
     df = pd.merge(df_data, df_labels[['timestamp', 'label']], on='timestamp', how='left')
 
-    # Supervised dataset
+    # Create sequences
     X, y = create_supervised(df, n_candles)
 
+    # Encode labels
     label_encoder = LabelEncoder()
     y_encoded = label_encoder.fit_transform(y)
 
-    if val_split:
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y_encoded, test_size=test_size, random_state=random_state, stratify=y_encoded
-        )
-        train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32),
-                                      torch.tensor(y_train, dtype=torch.long))
-        val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32),
-                                    torch.tensor(y_val, dtype=torch.long))
-        return train_dataset, val_dataset, label_encoder, df
+    if for_xgboost:
+        # Flatten each sequence for XGBoost: (seq_len, feat) -> (seq_len*feat,)
+        X_flat = np.array([seq.flatten() for seq in X])
+
+        if val_split:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_flat, y_encoded,
+                test_size=test_size,
+                random_state=random_state,
+                stratify=y_encoded
+            )
+            return X_train, y_train, X_val, y_val, label_encoder, df
+        else:
+            return X_flat, y_encoded, label_encoder, df
+
     else:
-        X_tensor = torch.tensor(X, dtype=torch.float32)
-        y_tensor = torch.tensor(y_encoded, dtype=torch.long)
-        dataset = TensorDataset(X_tensor, y_tensor)
-        return dataset, label_encoder, df
+        # Keep PyTorch Dataset for LSTM
+        if val_split:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y_encoded,
+                test_size=test_size,
+                random_state=random_state,
+                stratify=y_encoded
+            )
+            train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32),
+                                          torch.tensor(y_train, dtype=torch.long))
+            val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32),
+                                        torch.tensor(y_val, dtype=torch.long))
+            return train_dataset, val_dataset, label_encoder, df
+        else:
+            X_tensor = torch.tensor(X, dtype=torch.float32)
+            y_tensor = torch.tensor(y_encoded, dtype=torch.long)
+            dataset = TensorDataset(X_tensor, y_tensor)
+            return dataset, label_encoder, df
+
 
 def load_raw_data_serve(data_csv, labels_csv):
     """
