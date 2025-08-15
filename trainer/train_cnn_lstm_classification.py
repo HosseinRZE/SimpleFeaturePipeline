@@ -68,6 +68,7 @@ def train_model(
 
     model = CNNLSTMClassifier(
         input_dim=input_dim,
+        seq_len= seq_len,
         hidden_dim=hidden_dim,
         num_layers=num_layers,
         num_classes=num_classes,

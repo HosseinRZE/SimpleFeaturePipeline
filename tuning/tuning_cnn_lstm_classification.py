@@ -50,7 +50,7 @@ def train_cnn_lstm_tune(config):
     )
 
     # Report metrics to Ray Tune
-    tune.report(**metrics)
+    tune.report(metrics)
 
 
 def run_tuning(save_model=True):
