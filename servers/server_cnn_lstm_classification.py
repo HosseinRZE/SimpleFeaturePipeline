@@ -20,7 +20,11 @@ model = CNNLSTMClassifier(
     hidden_dim=meta['hidden_dim'],
     num_layers=meta['num_layers'],
     num_classes=meta['num_classes'],
-    lr=meta['lr']
+    lr=meta['lr'],
+    cnn_channels=meta['cnn_channels'],
+    cnn_kernel_sizes=meta['cnn_kernel_sizes'],
+    cnn_strides=meta['cnn_strides'],
+    cnn_paddings=meta['cnn_paddings']
 )
 model.load_state_dict(torch.load(state_path, map_location='cpu')["state_dict"])
 model.eval()

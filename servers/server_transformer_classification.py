@@ -9,20 +9,23 @@ from models.transformer.transform_classifier import TransformerClassifier
 app = Flask(__name__)
 
 # ---------- Load meta & model once at start-up ----------
-meta_path = sorted(glob.glob("models/saved_models/transformer_meta_*.pkl"))[-1]
-state_path = sorted(glob.glob("models/saved_models/transformer_class_*.pt"))[-1]
+meta_path = sorted(glob.glob("models/saved_models/transformer_meta_class_*.pkl"))[-1]
+state_path = sorted(glob.glob("models/saved_models/transformer_model_class*.pt"))[-1]
 
 meta = joblib.load(meta_path)
 
 model = TransformerClassifier(
     input_dim=meta['input_dim'],
     seq_len=meta['seq_len'],
-    d_model=meta['d_model'],
-    num_heads=meta['num_heads'],
+    d_model=meta['d_model'],            # must match training
+    num_heads=meta['num_heads'],        # must match training
     num_layers=meta['num_layers'],
     num_classes=meta['num_classes'],
-    lr=meta['lr']
+    lr=meta['lr'],
+    dim_feedforward=meta.get('dim_feedforward', 2048),  # if you saved it
+    dropout=meta.get('dropout', 0.1)                   # if you saved it
 )
+
 model.load_state_dict(torch.load(state_path, map_location='cpu')["state_dict"])
 model.eval()
 
