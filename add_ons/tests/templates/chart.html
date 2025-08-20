@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>OHLCV + ZigZag (step-based)</title>
+    <style>
+      body { background: #111; color: #ddd; font-family: ui-sans-serif, system-ui, -apple-system; }
+      .wrap { max-width: 1200px; margin: 24px auto; }
+      #chart { height: 560px; }
+      .panel { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+      .card { background: #1b1b1b; border: 1px solid #2a2a2a; border-radius: 12px; padding: 12px; }
+      label { font-size: 14px; }
+      input[type="number"] { width: 120px; padding: 6px; border-radius: 8px; border: 1px solid #333; background: #111; color: #ddd; }
+      pre { white-space: pre-wrap; font-size: 12px; }
+      a { color: #84cc16; text-decoration: none; }
+    </style>
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+  </head>
+  <body>
+    <div class="wrap">
+      <h2>OHLCV + ZigZag (step-by-step)</h2>
+
+      <form method="get" class="card" style="margin-bottom: 16px;">
+        <label for="row_index">Row index:</label>
+        <input id="row_index" type="number" name="row_index" value="{{ row_index }}" min="0" max="{{ max_index }}" />
+        <button type="submit">Go</button>
+        <span style="margin-left:12px;">(0 → {{ max_index }})</span>
+      </form>
+
+      <div class="panel">
+        <div id="chart" class="card"></div>
+        <div class="card">
+          <h3 style="margin-top:0;">Selected row data</h3>
+          <pre>{{ row_data }}</pre>
+          <p>Tip: change the <code>row_index</code> to see how pivots update step-by-step.</p>
+        </div>
+      </div>
+    </div>
+
+    <script>
+        const candles = {{ candles_json | safe }};
+        const pivotLine = {{ pivot_line_json | safe }};
+
+      const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+        layout: { background: { type: 'Solid', color: '#111' }, textColor: '#ddd' },
+        grid: { vertLines: { color: '#222' }, horzLines: { color: '#222' } },
+        rightPriceScale: { borderVisible: false },
+        timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
+        crosshair: { mode: 1 },
+      });
+
+      const candleSeries = chart.addCandlestickSeries();
+      candleSeries.setData(candles);
+
+        // Pivot line is already ordered list of pivots
+        const zzSeries = chart.addLineSeries({ lineWidth: 2, color: '#ff9800' });
+        zzSeries.setData(pivotLine);
+
+      chart.timeScale().fitContent();
+    </script>
+  </body>
+</html>
