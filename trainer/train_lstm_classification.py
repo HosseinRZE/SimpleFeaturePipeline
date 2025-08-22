@@ -4,20 +4,32 @@ import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from sklearn.metrics import classification_report, confusion_matrix
 from datetime import datetime
-
+from itertools import islice
 from preprocess.classification_pre import preprocess_csv
 from models.LSTM.lstm_classifier import LSTMClassifier
 
+
 def evaluate_model(model, val_loader, label_encoder):
-    """Generate classification report & confusion matrix."""
-    model.eval()
+    """
+    Evaluate a trained model on validation data.
+
+    Args:
+        model (torch.nn.Module): Trained LSTM classifier.
+        val_loader (DataLoader): DataLoader for validation dataset.
+        label_encoder (LabelEncoder): Fitted label encoder (for readable class names).
+
+    Prints:
+        - Classification report (precision, recall, f1, support).
+        - Confusion matrix.
+    """
+    model.eval()  # switch to evaluation mode
     all_preds, all_labels = [], []
 
-    with torch.no_grad():
+    with torch.no_grad():  # disable gradient tracking for speed
         for X_batch, y_batch in val_loader:
-            logits = model(X_batch)
-            preds = torch.argmax(logits, dim=1)
-            all_preds.extend(preds.cpu().numpy())
+            logits = model(X_batch)               # forward pass
+            preds = torch.argmax(logits, dim=1)   # predicted class index
+            all_preds.extend(preds.cpu().numpy()) # move to CPU, store
             all_labels.extend(y_batch.cpu().numpy())
 
     print("\n📊 Validation Report:")
@@ -26,6 +38,7 @@ def evaluate_model(model, val_loader, label_encoder):
     cm = confusion_matrix(all_labels, all_preds)
     print("Confusion Matrix:")
     print(cm)
+
 
 def train_model(
     data_csv,
@@ -42,21 +55,51 @@ def train_model(
     return_val_accuracy=False
 ):
     """
-    Train an LSTM classification model.
+    Train an LSTM classification model using PyTorch Lightning.
 
     Args:
-        data_csv (str): Path to candles CSV.
-        labels_csv (str): Path to labels CSV.
-        model_out_dir (str): Folder to save model & metadata.
-        do_validation (bool): Whether to split data for validation.
-        seq_len (int): Number of candles per sequence.
-        hidden_dim (int): LSTM hidden layer size.
-        num_layers (int): LSTM layer count.
-        lr (float): Learning rate.
-        batch_size (int): Training batch size.
-        max_epochs (int): Max training epochs.
-        save_model (bool): Save model & meta to disk.
-        return_val_accuracy (bool): If True, return validation accuracy.
+        data_csv (str): Path to candles CSV file (OHLCV data).
+        labels_csv (str): Path to labels CSV file (class labels).
+        model_out_dir (str, optional): Directory where model & metadata are saved.
+        do_validation (bool, optional): If True, split data into train/val sets.
+        seq_len (int, optional): Number of candles per sequence (LSTM input length).
+        hidden_dim (int, optional): Size of hidden state in LSTM.
+        num_layers (int, optional): Number of stacked LSTM layers.
+        lr (float, optional): Learning rate for optimizer.
+        batch_size (int, optional): Batch size for DataLoader.
+        max_epochs (int, optional): Number of training epochs.
+        save_model (bool, optional): If True, save model checkpoint & metadata.
+        return_val_accuracy (bool, optional): If True, return validation accuracy.
+
+    Returns:
+        dict | None: {"accuracy": float} if return_val_accuracy=True, else None.
+
+        Notes:
+        - If `do_validation=True`, this function calls `preprocess_csv` with `val_split=True`
+          and receives:
+            • train_ds (TensorDataset): training set, each element is (X_i, y_i).
+                - X_i shape: (seq_len, feature_dim), e.g. (3, 10) for one sequence.
+                - y_i: integer class label for that sequence.
+                - All data combined has shape:
+                    X_train.shape = (num_train_samples, seq_len, feature_dim)
+                    y_train.shape = (num_train_samples,)
+            • val_ds (TensorDataset): validation set, same format as train_ds.
+            • label_encoder (LabelEncoder): maps original string labels → integer classes.
+            • df (DataFrame): merged OHLCV data + labels for reference/inspection.
+
+        - If `do_validation=False`, it receives:
+            • full_dataset (TensorDataset): entire dataset without split.
+            • label_encoder (LabelEncoder).
+            • df (DataFrame).
+
+        - `input_dim` is automatically inferred from the dataset:
+            • It is the number of features per candle (columns in FEATURE_COLS).
+            • Computed as: `train_ds[0][0].shape[1]` if validation is enabled,
+              otherwise from `full_dataset`.
+            • For example, with FEATURE_COLS = 10, input_dim = 10.
+
+        - These datasets are wrapped into DataLoaders so PyTorch Lightning can feed
+          `(X_batch, y_batch)` pairs into the model during training.    
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_out = f"{model_out_dir}/lstm_model_class_{timestamp}.pt"
@@ -73,9 +116,11 @@ def train_model(
         )
 
     # --- Model config ---
+    # Determine input dimension (#features per time step)
     input_dim = train_ds[0][0].shape[1] if do_validation else full_dataset[0][0].shape[1]
     num_classes = len(label_encoder.classes_)
 
+    # Initialize model
     model = LSTMClassifier(
         input_dim=input_dim,
         hidden_dim=hidden_dim,
@@ -92,17 +137,29 @@ def train_model(
         train_loader = DataLoader(full_dataset, batch_size=batch_size, shuffle=True)
         val_loader   = None
 
-    #trainer
-    trainer = pl.Trainer(
-    max_epochs=max_epochs,
-    accelerator="auto",
-    devices=1,  # always at least 1 device
-    log_every_n_steps=10
-)
+    # --- print a sample
+    # --- Debug: Inspect one batch being fed to LSTM ---
+    X_batch, y_batch = next(islice(iter(train_loader), 2, 3))
 
+    print("🔍 Debug batch (third batch):")
+    print("  X_batch shape:", X_batch.shape)   # (batch_size, seq_len, feature_dim)
+    print("  y_batch shape:", y_batch.shape)   # (batch_size,)
+    print("  First sequence in batch:\n", X_batch[0])
+    print("  First label in batch:", y_batch[0])
+
+    # --- Trainer setup ---
+    trainer = pl.Trainer(
+        max_epochs=max_epochs,
+        accelerator="auto",   # automatically picks "gpu" if available, else "cpu"
+        devices=1,            # use 1 device (GPU if available)
+        log_every_n_steps=10,
+        fast_dev_run=True,    # ✅ runs 1 batch for train + 1 batch for val, no full training
+    )
+
+    # Train model
     trainer.fit(model, train_loader, val_loader)
 
-    # --- Save model & meta ---
+    # --- Save model & metadata ---
     if save_model:
         trainer.save_checkpoint(model_out)
         joblib.dump({
@@ -135,6 +192,7 @@ def train_model(
 
 
 if __name__ == "__main__":
+    # Example: training with validation split
     train_model(
         "data/Bitcoin_BTCUSDT_kaggle_1D_candles_prop.csv",
         "data/labeled_ohlcv_string.csv",

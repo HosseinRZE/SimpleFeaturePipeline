@@ -1,32 +1,54 @@
 import pandas as pd
 from utils.zigzag_bandf import ZigZag
 
-def add_zigzag(df, window_size=3, dev_threshold=1, max_pivots=10):
+def add_zigzag(
+    df,
+    window_size=3,
+    dev_threshold=1,
+    max_pivots=10,
+    stationary=False,
+    include_last_candle_as_pivot=True,
+    include_distances=True,
+    shadow_mode=False,
+    separatable="no"  # "no", "complete", "both"
+):
     """
-    Append zigzag features (swing highs/lows) to dataframe.
+    Append zigzag features (pivots + distances) to dataframe.
+    
+    Parameters:
+        separatable : str
+            - "no"       : default, merge features into main df only
+            - "complete" : features are not merged, returned in dict only
+            - "both"     : features are merged into df and also returned in dict
     """
-    zz = ZigZag(window_size=window_size, dev_threshold=dev_threshold, max_pivots=max_pivots)
+    if separatable not in ["no", "complete", "both"]:
+        raise ValueError("separatable must be 'no', 'complete', or 'both'")
+
+    zz = ZigZag(
+        window_size=window_size,
+        dev_threshold=dev_threshold,
+        max_pivots=max_pivots,
+        stationary=stationary,
+        include_last_candle_as_pivot=include_last_candle_as_pivot,
+        include_distances=include_distances,
+        shadow_mode=shadow_mode,
+    )
 
     df = df.copy()
-    highs, lows = [], []
+    feature_dicts = []
 
     for idx, row in df.iterrows():
         zz.update(idx, row["high"], row["low"], row["close"])
-        high_val, low_val = None, None
-        if zz.pivots:
-            last_pivot = zz.pivots[-1]
-            if last_pivot.is_high == True:
-                high_val = last_pivot.price
-            elif last_pivot.is_high == False:
-                low_val = last_pivot.price
-        highs.append(high_val)
-        lows.append(low_val)
+        features = zz.get_features(current_price=row["close"], current_index=idx)
+        feature_dicts.append(features)
 
-    df["zigzag_high"] = highs
-    df["zigzag_low"] = lows
+    features_df = pd.DataFrame(feature_dicts, index=df.index)
 
-    # Fill forward so we can use these in sequences
-    df["zigzag_high"].ffill(inplace=True)
-    df["zigzag_low"].ffill(inplace=True)
-
-    return df
+    if separatable == "complete":
+        return df, {"zigzag": features_df}
+    elif separatable == "both":
+        df = pd.concat([df, features_df], axis=1)
+        return df, {"zigzag": features_df}
+    else:  # "no"
+        df = pd.concat([df, features_df], axis=1)
+        return df

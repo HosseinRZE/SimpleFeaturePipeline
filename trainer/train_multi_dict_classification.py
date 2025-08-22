@@ -8,10 +8,10 @@ from datetime import datetime
 from add_ons.relative_change import add_pct_changes
 from add_ons.drop_column import drop_columns
 from add_ons.zigzag_single import add_zigzag
-from preprocess.classification_pre2 import preprocess_csv
-from models.LSTM.lstm_classifier import LSTMClassifier
+from preprocess.classification_pre_dict import preprocess_csv
+from models.LSTM.multilstm_classification import MultiLSTMClassifier
 from itertools import islice
-from add_ons.feature_pipeline import FeaturePipeline
+from add_ons.featue_pipeline2 import FeaturePipeline
 
 
 # ----------------- Evaluation -----------------
@@ -48,7 +48,7 @@ def train_model(
     max_epochs=10,
     save_model=False,
     return_val_accuracy=False,
-    test_mode=False
+    test_mode=True
 ):
     """
     Train an LSTM classification model with zigzag features and custom normalization.
@@ -59,41 +59,41 @@ def train_model(
 
     # --- Define Feature Pipeline ---
     pipeline = FeaturePipeline(
-        steps=[
-            
-            lambda df: add_pct_changes(df, relative_to="close"),
-            lambda df: drop_columns(df, ["open", "high", "low", "close", "volume"])
-        ],
-        norm_methods={
-            "upper_shadow": "standard",
-            "body": "robust",
-            "lower_shadow": "minmax",
-            "Candle_Color": "none"
-        }
-    )
+            steps=[lambda df: add_pct_changes(df, separatable="complete")],
+            norm_methods={
+                "main": {"upper_shadow": "standard"},
+                "pct_changes": {"open_pct": "standard", "high_pct": "standard"}
+            }
+        )
+
+    seq_dict = {"main": 5, "pct_changes": 3}  # different seq lens per group
+
 
     # --- Get dataset(s) ---
     if do_validation:
-        train_ds, val_ds, label_encoder, df, feature_cols = preprocess_csv(
+        train_ds, val_ds, label_encoder, df = preprocess_csv(
             data_csv, labels_csv,
-            n_candles=seq_len,
+            n_candles=seq_dict,
             val_split=True,
             feature_pipeline=pipeline
         )
     else:
-        full_dataset, label_encoder, df, feature_cols = preprocess_csv(
+        full_dataset,label_encoder, df ,feature_cols= preprocess_csv(
             data_csv, labels_csv,
-            n_candles=seq_len,
-            val_split=False,
+            n_candles=seq_dict,
+            val_split=True,
             feature_pipeline=pipeline
-        )
+)
 
     # --- Model config ---
-    input_dim = train_ds[0][0].shape[1] if do_validation else full_dataset[0][0].shape[1]
+    input_dims = {
+        "main": train_ds.X_dict["main"].shape[-1],
+        "pct_changes": train_ds.X_dict["pct_changes"].shape[-1]
+    }
     num_classes = len(label_encoder.classes_)
 
-    model = LSTMClassifier(
-        input_dim=input_dim,
+    model = MultiLSTMClassifier(
+        input_dims=input_dims,
         hidden_dim=hidden_dim,
         num_layers=num_layers,
         num_classes=num_classes,
@@ -102,28 +102,33 @@ def train_model(
 
     # --- DataLoaders ---
     if do_validation:
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-        val_loader   = DataLoader(val_ds, batch_size=batch_size)
+        train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
+        val_loader   = DataLoader(val_ds, batch_size=32)
     else:
-        train_loader = DataLoader(full_dataset, batch_size=batch_size, shuffle=True)
+        train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
         val_loader   = None
 
     # --- Debug mode ---
     if test_mode:
-        X_batch, y_batch = next(islice(iter(train_loader), 2, 3))
+        X_batch_dict, y_batch = next(islice(iter(train_loader), 2, 3))
         print("🔍 Debug batch (third batch):")
-        print("  X_batch shape:", X_batch.shape)   # (batch_size, seq_len, feature_dim)
+        print("  Keys in X_batch:", list(X_batch_dict.keys()))
         print("  y_batch shape:", y_batch.shape)   # (batch_size,)
-        print("  First sequence in batch:\n", X_batch[0])
         print("  First label in batch:", y_batch[0])
-        print("Feature columns used in LSTM:", feature_cols)
 
-        batch_size, seq_len, feature_dim = X_batch.shape
-        global df_seq
-        df_seq = pd.DataFrame(
-            X_batch.reshape(batch_size * seq_len, feature_dim).numpy(),
-            columns=feature_cols
-        )
+        # Iterate over dict to inspect each input
+        for name, X_batch in X_batch_dict.items():
+            print(f"\nFeature group: {name}")
+            print("  X_batch shape:", X_batch.shape)  # (batch_size, seq_len, feature_dim)
+            print("  First sequence in batch:\n", X_batch[0])
+
+            batch_size, seq_len, feature_dim = X_batch.shape
+            global df_seq
+            df_seq = pd.DataFrame(
+                X_batch.reshape(batch_size * seq_len, feature_dim).numpy(),
+                columns=[f"{name}_{c}" for c in range(feature_dim)]  # temporary column names
+            )
+
 
     # --- Trainer ---
     trainer = pl.Trainer(
@@ -140,7 +145,7 @@ def train_model(
     if save_model:
         trainer.save_checkpoint(model_out)
         joblib.dump({
-            'input_dim': input_dim,
+            'input_dim': input_dims,
             'hidden_dim': hidden_dim,
             'num_layers': num_layers,
             'num_classes': num_classes,
