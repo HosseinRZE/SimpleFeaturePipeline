@@ -116,18 +116,25 @@ def train_model(
         print("  y_batch shape:", y_batch.shape)   # (batch_size,)
         print("  First label in batch:", y_batch[0])
 
-        # Iterate over dict to inspect each input
+        dfs = []  # collect DataFrames for each dict
+
         for name, X_batch in X_batch_dict.items():
             print(f"\nFeature group: {name}")
             print("  X_batch shape:", X_batch.shape)  # (batch_size, seq_len, feature_dim)
             print("  First sequence in batch:\n", X_batch[0])
 
             batch_size, seq_len, feature_dim = X_batch.shape
-            global df_seq
-            df_seq = pd.DataFrame(
+            df_part = pd.DataFrame(
                 X_batch.reshape(batch_size * seq_len, feature_dim).numpy(),
-                columns=[f"{name}_{c}" for c in range(feature_dim)]  # temporary column names
+                columns=[f"{name}_{c}" for c in range(feature_dim)]  # prefix with dict name
             )
+            dfs.append(df_part)
+
+        # 🔗 Concatenate all dicts into one big DataFrame
+        global df_seq
+        df_seq = pd.concat(dfs, axis=1)
+
+        print("\n✅ Combined df_seq shape:", df_seq.shape)
 
 
     # --- Trainer ---
