@@ -15,4 +15,4 @@ models/**
 !models/*.md
 !models/README
 # Data folder
-data/
+data/**/*
