@@ -2,7 +2,11 @@ import joblib
 from datetime import datetime
 import xgboost as xgb
 from sklearn.metrics import classification_report, confusion_matrix
-from preprocess.classification_pre import preprocess_csv
+from utils.print_batch import print_batch
+from add_ons.featue_pipeline2 import FeaturePipeline
+from add_ons.drop_column import drop_columns
+from add_ons.candle_proportion import add_candle_proportions
+from preprocess.classification_pre_dict import preprocess_csv
 
 def train_model_xgb(
     data_csv,
@@ -15,7 +19,7 @@ def train_model_xgb(
     learning_rate=0.05,
     subsample=0.8,
     colsample_bytree=0.8,
-    save_model=True,
+    save_model=False,
     return_val_accuracy=False,
     **model_params
 ):
@@ -40,16 +44,17 @@ def train_model_xgb(
     model_out = f"{model_out_dir}/xgb_model_class_{timestamp}.pkl"
     meta_out  = f"{model_out_dir}/xgb_meta_class_{timestamp}.pkl"
     pipeline = FeaturePipeline(
-            steps=[lambda df: drop_columns(df, ["open","high","close","volume", "low",
-])],
+            steps=[ lambda df: add_candle_proportions(df, separatable="no", additional_props=True),
+                   lambda df: drop_columns(df, ["open","high","close","volume", "low",
+])],)
     # --- Dataset ---
     if do_validation:
-        X_train, y_train, X_val, y_val, label_encoder, df = preprocess_csv(
-            data_csv, labels_csv, n_candles=seq_len, val_split=True, for_xgboost=True
+        X_train, y_train, X_val, y_val, label_encoder, df, feature_cols = preprocess_csv(
+            data_csv, labels_csv, n_candles=seq_len, val_split=True, for_xgboost=True,feature_pipeline=pipeline,debug_sample =[0,2]
         )
     else:
-        X_train, y_train, label_encoder, df = preprocess_csv(
-            data_csv, labels_csv, n_candles=seq_len, val_split=False, for_xgboost=True
+        X_train, y_train, label_encoder, df, feature_cols = preprocess_csv(
+            data_csv, labels_csv, n_candles=seq_len, val_split=False, for_xgboost=True,feature_pipeline=pipeline
         )
         X_val, y_val = None, None
 
@@ -103,7 +108,7 @@ def train_model_xgb(
 
 if __name__ == "__main__":
     train_model_xgb(
-        "data/Bitcoin_BTCUSDT_kaggle_1D_candles_prop.csv",
+        "data/Bitcoin_BTCUSDT_kaggle_1D_candles.csv",
         "data/labeled_ohlcv_candle.csv",
         do_validation=True
     )

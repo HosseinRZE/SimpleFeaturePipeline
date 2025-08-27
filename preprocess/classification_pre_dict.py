@@ -101,6 +101,7 @@ def preprocess_csv(
             - If for_xgboost=True: returns numpy arrays instead of torch tensors.
     """
     # Load OHLC
+    # Load OHLC
     df_data = pd.read_csv(data_csv)
     if not all(col in df_data.columns for col in ['open', 'high', 'low', 'close']):
         df_data['open'] = df_data['close']
@@ -166,38 +167,40 @@ def preprocess_csv(
     # --- DEBUG SAMPLE PRINT ---
     if debug_sample is not False:
         print("\n=== DEBUG SAMPLE CHECK ===")
-
-        # if just True, convert to [0] (first sample only)
-        if debug_sample is True:
-            indices = [0]
-        elif isinstance(debug_sample, (list, tuple, np.ndarray)):
-            indices = list(debug_sample)
-        else:
-            raise ValueError("debug_sample must be True, False, or a list of indices")
-
+        indices = [0] if debug_sample is True else list(debug_sample)
         for idx in indices:
             print(f"\n--- Sample index {idx} ---")
             if isinstance(n_candles, int):
                 seq_df = df.iloc[idx:idx+n_candles].copy()
                 print("Features (sequence):")
                 print(seq_df[['timestamp'] + feature_cols])
-
                 print("\nCorresponding label:")
                 print(df.iloc[idx+n_candles-1][['timestamp', 'label']])
                 print("Encoded label:", y_encoded[idx])
-
             elif isinstance(n_candles, dict):
                 for k, v in X.items():
                     print(f"\nFeature group: {k}")
                     seq = v[idx]
                     print("Shape:", seq.shape)
                 print("\nLabel at same index:", y[idx], "Encoded:", y_encoded[idx])
-                # timestamp of label
                 print(df.iloc[max(n_candles.values())-1+idx][['timestamp', 'label']])
-
         print("==========================\n")
 
-    # --- Return dataset ---
+    # --- XGBOOST RETURN ---
+    if for_xgboost and isinstance(n_candles, int):
+        X_flat = np.array([seq.flatten() for seq in X])
+        if val_split:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_flat, y_encoded,
+                test_size=test_size,
+                random_state=random_state,
+                stratify=y_encoded
+            )
+            return X_train, y_train, X_val, y_val, label_encoder, df, feature_cols
+        else:
+            return X_flat, y_encoded, label_encoder, df, feature_cols
+
+    # --- TORCH RETURN ---
     if isinstance(n_candles, dict):
         dataset = MultiInputDataset(X, y_encoded)
         if val_split:
@@ -218,7 +221,6 @@ def preprocess_csv(
             )
         else:
             return dataset, label_encoder, df
-
     else:
         X_tensor = torch.tensor(X, dtype=torch.float32)
         y_tensor = torch.tensor(y_encoded, dtype=torch.long)

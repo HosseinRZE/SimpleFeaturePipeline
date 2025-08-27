@@ -4,8 +4,8 @@ import pandas as pd
 def add_candle_proportions(
     df,
     period=50,
-    additional_props=False,
-    include_candle_color=False,
+    additional_props=True,
+    include_candle_color=True,
     abs_props=True,
     upper_bound=5,
     return_last_row_only=False,
