@@ -4,8 +4,9 @@ import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from sklearn.metrics import classification_report, confusion_matrix
 from datetime import datetime
+from utils.print_batch import print_batch
 
-from preprocess.classification_pre import preprocess_csv
+from preprocess.classification_pre_dict import preprocess_csv
 from models.LSTM.cnn_lstm_classifier import CNNLSTMClassifier
 
 def evaluate_model(model, val_loader, label_encoder):
@@ -46,6 +47,7 @@ def train_model(
     cnn_kernel_sizes=(3,),
     cnn_strides=(1,),
     cnn_paddings=(0,),
+    test_mode = False
 ):
     # --- Timestamp for unique filenames ---
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -54,14 +56,17 @@ def train_model(
 
     # --- Get dataset(s) ---
     if do_validation:
-        train_ds, val_ds, label_encoder, df = preprocess_csv(
+        train_ds, val_ds, label_encoder, df, feature_cols = preprocess_csv(
             data_csv, labels_csv, n_candles=seq_len, val_split=True
         )
     else:
-        full_dataset, label_encoder, df = preprocess_csv(
+        full_dataset, label_encoder, df, feature_cols = preprocess_csv(
             data_csv, labels_csv, n_candles=seq_len, val_split=False
         )
 
+    if test_mode:
+        global df_seq
+        df_seq = print_batch(train_loader, feature_cols, batch_idx=2)
     # --- Model config ---
     input_dim = train_ds[0][0].shape[1] if do_validation else full_dataset[0][0].shape[1]
     num_classes = len(label_encoder.classes_)

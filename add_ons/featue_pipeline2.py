@@ -18,6 +18,17 @@ class FeaturePipeline:
         )
         df_processed = fp.fit_transform(df)
         df_new = fp.transform(df_new)
+
+        example 2:
+        pipeline = FeaturePipeline(
+        steps=[
+            lambda df: add_pct_changes(df, relative_to="close", separatable="no"),  # no extra dict
+            lambda df: drop_columns(df, ["volume"])  # remove volume column
+        ],
+        norm_methods={
+        "main": {"upper_shadow": "standard", "high": "minmax"}  # normalize directly in df
+            }
+        )
     """
 
     def __init__(self, steps=None, norm_methods=None):

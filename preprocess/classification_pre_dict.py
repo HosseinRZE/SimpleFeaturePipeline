@@ -40,7 +40,7 @@ def create_supervised(df, n_candles, feature_cols=None, labels=None):
         for i in range(n_candles, len(df)):
             label = df.loc[i, 'label'] if 'label' in df.columns else labels[i]
             if pd.notna(label):
-                past_candles = df.loc[i-n_candles:i-1, feature_cols].values
+                past_candles = df.loc[i-n_candles+1:i, feature_cols].values
                 X.append(past_candles)
                 y.append(label)
         return np.array(X), np.array(y)
@@ -61,8 +61,45 @@ def preprocess_csv(
     test_size=0.2,
     random_state=42,
     for_xgboost=False,
-    feature_pipeline=None
+    feature_pipeline=None,
+    debug_sample=False   # <--- NEW ARG
 ):
+    """
+    Preprocess OHLCV data + labels into supervised learning format.
+
+    Args:
+        data_csv (str): Path to CSV with OHLCV data. Must include 'timestamp' and 'close'.
+        labels_csv (str): Path to CSV with labels. Must include 'timestamp' and 'labels' (renamed to 'label').
+        n_candles (int or dict): 
+            - If int: number of past candles to use as one input sequence.
+            - If dict: keys = feature group names, values = sequence lengths. 
+                       Requires `feature_pipeline` to produce extra feature groups.
+        val_split (bool, optional): Whether to create a validation split. Default = False.
+        test_size (float, optional): Validation set size if `val_split=True`. Default = 0.2.
+        random_state (int, optional): Random seed for reproducibility. Default = 42.
+        for_xgboost (bool, optional): If True, returns flattened arrays for XGBoost instead of tensors. Default = False.
+        feature_pipeline (list of callables, optional): Optional preprocessing/feature functions.
+            Each function should accept a DataFrame and return either:
+                - a modified DataFrame, OR
+                - (modified_df, dict_of_feature_groups).
+        debug_sample (bool or list, optional):
+            - False (default): no debug printing.
+            - True: print the **first sample** (index 0) with its feature sequence and corresponding label.
+            - list/tuple/array of indices: print **those sample indices** with their sequences and labels, 
+              including timestamps, for manual alignment checks.
+
+    Returns:
+        Depending on arguments:
+            - If val_split=False and n_candles is int:
+                dataset, label_encoder, df, feature_cols
+            - If val_split=True and n_candles is int:
+                train_dataset, val_dataset, label_encoder, df, feature_cols
+            - If val_split=False and n_candles is dict:
+                dataset, label_encoder, df
+            - If val_split=True and n_candles is dict:
+                train_dataset, val_dataset, label_encoder, df
+            - If for_xgboost=True: returns numpy arrays instead of torch tensors.
+    """
     # Load OHLC
     df_data = pd.read_csv(data_csv)
     if not all(col in df_data.columns for col in ['open', 'high', 'low', 'close']):
@@ -79,7 +116,7 @@ def preprocess_csv(
     df = pd.merge(df_data, df_labels[['timestamp', 'label']], on='timestamp', how='left')
 
     # --- Apply feature pipeline ---
-    extra_dicts = {}   # collect separatable feature groups
+    extra_dicts = {}
     if feature_pipeline is not None:
         for func in feature_pipeline:
             out = func(df)
@@ -92,14 +129,12 @@ def preprocess_csv(
 
     # --- Handle dataset creation ---
     if isinstance(n_candles, int):
-        # Normal supervised creation
         feature_cols = [col for col in df.columns if col not in ("timestamp", "label")]
         X, y = create_supervised(df, n_candles, feature_cols)
 
     elif isinstance(n_candles, dict):
         X_dict = {}
-        Ys = []   # collect labels from each group
-
+        Ys = []
         for key, seq_len in n_candles.items():
             if key == "main":
                 feature_cols = [col for col in df.columns if col not in ("timestamp", "label")]
@@ -115,11 +150,10 @@ def preprocess_csv(
                 X_dict[key] = X_part
                 Ys.append(y_sub)
 
-        # ⚡ align everything by shortest length
         min_len = min(len(arr) for arr in Ys)
         for k in X_dict:
             X_dict[k] = X_dict[k][-min_len:]
-        y = Ys[0][-min_len:]   # all Ys should be aligned now
+        y = Ys[0][-min_len:]
         X = X_dict
 
     else:
@@ -128,6 +162,40 @@ def preprocess_csv(
     # --- Encode labels ---
     label_encoder = LabelEncoder()
     y_encoded = label_encoder.fit_transform(y)
+
+    # --- DEBUG SAMPLE PRINT ---
+    if debug_sample is not False:
+        print("\n=== DEBUG SAMPLE CHECK ===")
+
+        # if just True, convert to [0] (first sample only)
+        if debug_sample is True:
+            indices = [0]
+        elif isinstance(debug_sample, (list, tuple, np.ndarray)):
+            indices = list(debug_sample)
+        else:
+            raise ValueError("debug_sample must be True, False, or a list of indices")
+
+        for idx in indices:
+            print(f"\n--- Sample index {idx} ---")
+            if isinstance(n_candles, int):
+                seq_df = df.iloc[idx:idx+n_candles].copy()
+                print("Features (sequence):")
+                print(seq_df[['timestamp'] + feature_cols])
+
+                print("\nCorresponding label:")
+                print(df.iloc[idx+n_candles-1][['timestamp', 'label']])
+                print("Encoded label:", y_encoded[idx])
+
+            elif isinstance(n_candles, dict):
+                for k, v in X.items():
+                    print(f"\nFeature group: {k}")
+                    seq = v[idx]
+                    print("Shape:", seq.shape)
+                print("\nLabel at same index:", y[idx], "Encoded:", y_encoded[idx])
+                # timestamp of label
+                print(df.iloc[max(n_candles.values())-1+idx][['timestamp', 'label']])
+
+        print("==========================\n")
 
     # --- Return dataset ---
     if isinstance(n_candles, dict):
@@ -152,36 +220,22 @@ def preprocess_csv(
             return dataset, label_encoder, df
 
     else:
-        # single input case (same as your old version)
-        if for_xgboost:
-            X_flat = np.array([seq.flatten() for seq in X])
-            if val_split:
-                X_train, X_val, y_train, y_val = train_test_split(
-                    X_flat, y_encoded,
-                    test_size=test_size,
-                    random_state=random_state,
-                    stratify=y_encoded
-                )
-                return X_train, y_train, X_val, y_val, label_encoder, df, feature_cols
-            else:
-                return X_flat, y_encoded, label_encoder, df, feature_cols
+        X_tensor = torch.tensor(X, dtype=torch.float32)
+        y_tensor = torch.tensor(y_encoded, dtype=torch.long)
+        dataset = TensorDataset(X_tensor, y_tensor)
+        if val_split:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_tensor, y_tensor,
+                test_size=test_size,
+                random_state=random_state,
+                stratify=y_encoded
+            )
+            return (
+                TensorDataset(X_train, y_train),
+                TensorDataset(X_val, y_val),
+                label_encoder,
+                df,
+                feature_cols
+            )
         else:
-            X_tensor = torch.tensor(X, dtype=torch.float32)
-            y_tensor = torch.tensor(y_encoded, dtype=torch.long)
-            dataset = TensorDataset(X_tensor, y_tensor)
-            if val_split:
-                X_train, X_val, y_train, y_val = train_test_split(
-                    X_tensor, y_tensor,
-                    test_size=test_size,
-                    random_state=random_state,
-                    stratify=y_encoded
-                )
-                return (
-                    TensorDataset(X_train, y_train),
-                    TensorDataset(X_val, y_val),
-                    label_encoder,
-                    df,
-                    feature_cols
-                )
-            else:
-                return dataset, label_encoder, df, feature_cols
+            return dataset, label_encoder, df, feature_cols

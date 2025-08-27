@@ -39,7 +39,9 @@ def train_model_xgb(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_out = f"{model_out_dir}/xgb_model_class_{timestamp}.pkl"
     meta_out  = f"{model_out_dir}/xgb_meta_class_{timestamp}.pkl"
-
+    pipeline = FeaturePipeline(
+            steps=[lambda df: drop_columns(df, ["open","high","close","volume", "low",
+])],
     # --- Dataset ---
     if do_validation:
         X_train, y_train, X_val, y_val, label_encoder, df = preprocess_csv(
@@ -102,6 +104,6 @@ def train_model_xgb(
 if __name__ == "__main__":
     train_model_xgb(
         "data/Bitcoin_BTCUSDT_kaggle_1D_candles_prop.csv",
-        "data/labeled_ohlcv_string.csv",
+        "data/labeled_ohlcv_candle.csv",
         do_validation=True
     )

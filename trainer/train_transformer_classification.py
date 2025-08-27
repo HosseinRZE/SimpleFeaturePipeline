@@ -4,8 +4,8 @@ import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from sklearn.metrics import classification_report, confusion_matrix
 from datetime import datetime
-
-from preprocess.classification_pre import preprocess_csv
+from utils.print_batch import print_batch
+from preprocess.classification_pre_dict import preprocess_csv
 from models.transformer.transform_classifier  import TransformerClassifier  # <-- your Transformer
 
 def evaluate_model(model, val_loader, label_encoder):
@@ -31,7 +31,7 @@ def train_model(
     data_csv,
     labels_csv,
     model_out_dir="models/saved_models",
-    do_validation=False,
+    do_validation=True,
     seq_len=3,
     d_model=64,
     num_heads=4,
@@ -41,8 +41,9 @@ def train_model(
     lr=0.001,
     batch_size=32,
     max_epochs=10,
-    save_model=True,
-    return_val_accuracy=False
+    save_model=False,
+    return_val_accuracy=True,
+    test_mode = True
 ):
     """
     Train a Transformer classification model.
@@ -70,11 +71,11 @@ def train_model(
 
     # --- Get dataset(s) ---
     if do_validation:
-        train_ds, val_ds, label_encoder, df = preprocess_csv(
+        train_ds, val_ds, label_encoder, df, feature_cols = preprocess_csv(
             data_csv, labels_csv, n_candles=seq_len, val_split=True
         )
     else:
-        full_dataset, label_encoder, df = preprocess_csv(
+        full_dataset, label_encoder, df, feature_cols = preprocess_csv(
             data_csv, labels_csv, n_candles=seq_len, val_split=False
         )
 
@@ -102,6 +103,9 @@ def train_model(
         train_loader = DataLoader(full_dataset, batch_size=batch_size, shuffle=True)
         val_loader   = None
 
+    if test_mode:
+        global df_seq
+        df_seq = print_batch(train_loader, feature_cols, batch_idx=2)
     # --- Trainer ---
     trainer = pl.Trainer(
         max_epochs=max_epochs,
@@ -133,6 +137,7 @@ def train_model(
     # --- Optional evaluation ---
     val_acc = None
     if do_validation:
+        evaluate_model(model, val_loader, label_encoder)
         model.eval()
         all_preds, all_labels = [], []
         with torch.no_grad():
@@ -150,6 +155,6 @@ def train_model(
 if __name__ == "__main__":
     train_model(
         "data/Bitcoin_BTCUSDT_kaggle_1D_candles_prop.csv",
-        "data/labeled_ohlcv_string.csv",
+        "data/labeled_ohlcv_candle.csv",
         do_validation=True
     )

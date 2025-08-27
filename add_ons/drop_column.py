@@ -6,8 +6,32 @@ def drop_columns(data, cols_to_drop, dict_name="main"):
         data (pd.DataFrame or (pd.DataFrame, dict)): Input DataFrame or (df, dict_of_dfs).
         cols_to_drop (list[str]): Columns to remove.
         dict_name (str): Which dict to drop columns from ("main" by default).
+    Example (inside FeaturePipeline):
+        pipeline = FeaturePipeline(
+            steps=[
+                lambda df: add_pct_changes(df, separatable="complete"),
+                lambda data: drop_columns(data, ["volume", "low"], dict_name="main"),
+                lambda data: drop_columns(data, ["open_pct", "close_pct"], dict_name="pct_changes")
+            ],
+            norm_methods={
+                "main": {"upper_shadow": "standard"},
+                "pct_changes": {"high_pct": "standard"}
+            }
+)
+    Example 2:    
+        pipeline = FeaturePipeline(
+        steps=[
+    
+            lambda data: drop_columns(data, ["volume", "low"]),
+     
+        ],
+        norm_methods={
+            "main": {"upper_shadow": "standard"},
 
-    Returns:
+    }
+)
+
+    Returns: 
         pd.DataFrame or (pd.DataFrame, dict): Updated structure.
     """
     if isinstance(data, tuple):

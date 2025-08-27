@@ -5,8 +5,10 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import classification_report, confusion_matrix
 from datetime import datetime
 from itertools import islice
-from preprocess.classification_pre import preprocess_csv
+from preprocess.classification_pre_dict import preprocess_csv
 from models.LSTM.lstm_classifier import LSTMClassifier
+import pandas as pd 
+from utils.print_batch import print_batch
 
 
 def evaluate_model(model, val_loader, label_encoder):
@@ -44,15 +46,16 @@ def train_model(
     data_csv,
     labels_csv,
     model_out_dir="models/saved_models",
-    do_validation=False,
+    do_validation=True,
     seq_len=3,
-    hidden_dim=64,
+    hidden_dim=10,
     num_layers=1,
     lr=0.001,
     batch_size=32,
-    max_epochs=10,
+    max_epochs=50,
     save_model=True,
-    return_val_accuracy=False
+    return_val_accuracy=True,
+    test_mode = False
 ):
     """
     Train an LSTM classification model using PyTorch Lightning.
@@ -106,13 +109,20 @@ def train_model(
     meta_out  = f"{model_out_dir}/lstm_meta_class_{timestamp}.pkl"
 
     # --- Get dataset(s) ---
+    # --- Get dataset(s) ---
     if do_validation:
-        train_ds, val_ds, label_encoder, df = preprocess_csv(
-            data_csv, labels_csv, n_candles=seq_len, val_split=True
+        train_ds, val_ds, label_encoder, df, feature_cols = preprocess_csv(
+            data_csv, labels_csv,
+            n_candles=seq_len,
+            val_split=True,
+            # feature_pipeline=pipeline
         )
     else:
-        full_dataset, label_encoder, df = preprocess_csv(
-            data_csv, labels_csv, n_candles=seq_len, val_split=False
+        full_dataset, label_encoder, df, feature_cols = preprocess_csv(
+            data_csv, labels_csv,
+            n_candles=seq_len,
+            val_split=False,
+            # feature_pipeline=pipeline
         )
 
     # --- Model config ---
@@ -139,13 +149,9 @@ def train_model(
 
     # --- print a sample
     # --- Debug: Inspect one batch being fed to LSTM ---
-    X_batch, y_batch = next(islice(iter(train_loader), 2, 3))
-
-    print("🔍 Debug batch (third batch):")
-    print("  X_batch shape:", X_batch.shape)   # (batch_size, seq_len, feature_dim)
-    print("  y_batch shape:", y_batch.shape)   # (batch_size,)
-    print("  First sequence in batch:\n", X_batch[0])
-    print("  First label in batch:", y_batch[0])
+    if test_mode:
+        global df_seq
+        df_seq = print_batch(train_loader, feature_cols, batch_idx=2)
 
     # --- Trainer setup ---
     trainer = pl.Trainer(
@@ -153,7 +159,7 @@ def train_model(
         accelerator="auto",   # automatically picks "gpu" if available, else "cpu"
         devices=1,            # use 1 device (GPU if available)
         log_every_n_steps=10,
-        fast_dev_run=True,    # ✅ runs 1 batch for train + 1 batch for val, no full training
+        fast_dev_run=test_mode,    # ✅ runs 1 batch for train + 1 batch for val, no full training
     )
 
     # Train model
@@ -177,6 +183,7 @@ def train_model(
     # --- Optional evaluation ---
     val_acc = None
     if do_validation:
+        evaluate_model(model, val_loader, label_encoder)
         model.eval()
         all_preds, all_labels = [], []
         with torch.no_grad():
