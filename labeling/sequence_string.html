@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>OHLC Labeling Tool — Keyboard Character Labels</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+:root { --bg:#ffffff; --fg:#111; --muted:#777; --accent:#e53935; --label:#2979ff; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  background: var(--bg);
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+}
+#controls {
+  display:flex; gap:10px; align-items:center;
+  padding:10px 12px; border-bottom:1px solid #e5e7eb;
+  position: sticky; top:0; background: var(--bg); z-index:5;
+}
+#wrapper { position: relative; width: 100%; flex: 1 1 auto; }
+#chart { width: 100%; height: 100%; }
+#overlay { position: absolute; top:0; left:0; right:0; bottom:0; pointer-events: none; z-index:9999; }
+.vline { position:absolute; top:0; bottom:0; width:2px; background: var(--accent); opacity:0.95; transform:translateX(-50%); }
+.label { position:absolute; top:5px; font-size:20px; font-weight:bold; color:var(--label); text-align:center; }
+button { padding: 6px 12px; border:1px solid #e5e7eb; background:#f8fafc; border-radius:8px; cursor:pointer; }
+button:hover { background:#eef2ff; }
+input[type="file"] { font-size: 14px; }
+.badge { font-size: 12px; padding: 2px 6px; border-radius: 999px; border:1px solid #e5e7eb; }
+</style>
+</head>
+<body>
+<div id="controls">
+  <input type="file" id="csvFile" accept=".csv" />
+  <button id="saveLog">Save Log</button>
+  <button id="undoBtn">Undo</button>
+  <span class="badge" id="stageBadge">Stage: pick start</span>
+</div>
+
+<div id="wrapper">
+  <div id="chart"></div>
+  <div id="overlay"></div>
+</div>
+
+<script>
+const chartEl = document.getElementById('chart');
+const overlay = document.getElementById('overlay');
+const stageBadge = document.getElementById('stageBadge');
+
+const chart = LightweightCharts.createChart(chartEl, {
+  layout: { background: { type:'solid', color:'#fff' }, textColor:'#111' },
+  grid: { vertLines:{visible:false}, horzLines:{visible:false} },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  rightPriceScale:{ borderVisible:false },
+  timeScale:{ borderVisible:false }
+});
+const series = chart.addCandlestickSeries();
+
+let data=[], indexByTime=new Map();
+let startTime=null, endTime=null;
+let logs=[];
+const STAGES={START:0, END:1, LABEL:2};
+let stage = STAGES.START;
+let lastAction = null;
+let currentLabel = null; // {div, char}
+
+function setStage(s){
+  stage = s;
+  stageBadge.textContent = 'Stage: ' + (s===STAGES.START?'pick start': s===STAGES.END?'pick end':'add label');
+}
+
+// --- CSV parsing ---
+function toSec(t){ return /^\d+$/.test(t)? +t : Math.floor(new Date(t).getTime()/1000); }
+function parseCSV(text){
+  const rows = text.replace(/\r/g,'').trim().split('\n');
+  return rows.slice(1).map(r=>{
+    const p=r.split(',');
+    const t=toSec((p[0]||'').trim());
+    return {time:t, open:+p[1], high:+p[2], low:+p[3], close:+p[4]};
+  }).filter(d=>Number.isFinite(d.time));
+}
+
+document.getElementById('csvFile').addEventListener('change', e=>{
+  const file=e.target.files[0];
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=evt=>{
+    data=parseCSV(evt.target.result);
+    series.setData(data);
+    indexByTime = new Map(data.map((d,i)=>[d.time,i]));
+    clearAll(false);
+  };
+  reader.readAsText(file);
+});
+
+// --- Vertical lines + label ---
+function getCanvasLeftOffset(){
+  const canvas = chartEl.querySelector('canvas');
+  if(!canvas) return 0;
+  return canvas.getBoundingClientRect().left - overlay.getBoundingClientRect().left;
+}
+
+function renderVerticals(){
+  overlay.innerHTML = '';
+  const offset=getCanvasLeftOffset();
+  const drawLine = (time)=>{
+    if(time==null) return;
+    const x = chart.timeScale().timeToCoordinate(time);
+    if(x==null || isNaN(x)) return;
+    const el=document.createElement('div');
+    el.className='vline';
+    el.style.left = Math.round(x+offset)+'px';
+    overlay.appendChild(el);
+  };
+  if(startTime!=null) drawLine(startTime);
+  if(endTime!=null) drawLine(endTime);
+
+  // Draw current label if exists
+  if(currentLabel && startTime!=null && endTime!=null){
+    const xStart = chart.timeScale().timeToCoordinate(startTime);
+    const xEnd = chart.timeScale().timeToCoordinate(endTime);
+    if(xStart!=null && xEnd!=null){
+      const offsetX = getCanvasLeftOffset();
+      const div = currentLabel.div;
+      div.style.left = Math.round((xStart+xEnd)/2 + offsetX)+'px';
+      div.style.width = Math.abs(xEnd-xStart)+'px';
+      overlay.appendChild(div);
+    }
+  }
+}
+chart.timeScale().subscribeVisibleTimeRangeChange(renderVerticals);
+new ResizeObserver(renderVerticals).observe(chartEl);
+
+// --- Label logic ---
+function setLabel(char){
+  if(!startTime || !endTime) return;
+  if(currentLabel) overlay.removeChild(currentLabel.div);
+  const div = document.createElement('div');
+  div.className='label';
+  div.textContent = char;
+  currentLabel = {div, char};
+  lastAction='label';
+  renderVerticals();
+}
+
+// --- Clear / log ---
+function clearAll(logIt=true){
+  if(logIt && startTime && endTime){
+    const s=indexByTime.get(startTime), e=indexByTime.get(endTime);
+    logs.push({
+      startIndex: Math.min(s,e),
+      endIndex: Math.max(s,e),
+      startTime, endTime,
+      label: currentLabel? currentLabel.char:null
+    });
+  }
+  currentLabel && overlay.removeChild(currentLabel.div);
+  currentLabel = null;
+  startTime=null; endTime=null;
+  renderVerticals();
+  setStage(STAGES.START);
+}
+
+// --- Chart click ---
+chart.subscribeClick(param=>{
+  if(!param || param.time==null) return;
+  const t = param.time;
+  if(stage===STAGES.START){ startTime=t; setStage(STAGES.END); lastAction='start'; renderVerticals(); }
+  else if(stage===STAGES.END){ endTime=t; setStage(STAGES.LABEL); lastAction='end'; renderVerticals(); }
+});
+
+// --- Keyboard input for label ---
+window.addEventListener('keydown', e=>{
+  if(e.code==='Space' && !isTypingInInput(e)){ e.preventDefault(); clearAll(true); }
+  else if(stage===STAGES.LABEL && e.key.length===1 && /^[a-zA-Z0-9]$/.test(e.key)){
+    setLabel(e.key);
+  }
+});
+
+function isTypingInInput(e){ const el=e.target;if(!el)return false; const t=(el.tagName||'').toLowerCase(); return t==='input'||t==='textarea'||el.isContentEditable; }
+
+// --- Undo ---
+document.getElementById('undoBtn').addEventListener('click', ()=>{
+  if(lastAction==='label' && currentLabel){ overlay.removeChild(currentLabel.div); currentLabel=null; }
+  else if(lastAction==='end' && endTime){ endTime=null; setStage(STAGES.END); }
+  else if(lastAction==='start' && startTime){ startTime=null; setStage(STAGES.START); }
+  lastAction=null;
+});
+
+// --- Save ---
+document.getElementById('saveLog').addEventListener('click', ()=>{
+  const blob=new Blob([JSON.stringify(logs,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download='ohlcv_labels.json'; document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+});
+</script>
+</body>
+</html>

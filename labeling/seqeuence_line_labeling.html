@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>OHLC Labeling Tool</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    :root { --bg:#ffffff; --fg:#111; --muted:#777; --accent:#e53935; --hline:#2979ff; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      background: var(--bg);
+      color: var(--fg);
+      display: flex;
+      flex-direction: column;
+    }
+    #controls {
+      display:flex;
+      gap:10px;
+      align-items:center;
+      padding:10px 12px;
+      border-bottom:1px solid #e5e7eb;
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+      z-index: 5;
+    }
+    #wrapper {
+      position: relative;
+      width: 100%;
+      flex: 1 1 auto;
+    }
+    #chart { width: 100%; height: 100%; }
+    #overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      pointer-events: none;
+      z-index: 9999;
+    }
+    .vline {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 2px;
+      background: var(--accent);
+      opacity: 0.95;
+      transform: translateX(-50%);
+      z-index: 10000;
+    }
+    .hint { font-size: 12px; color: var(--muted); margin-left: auto; }
+    button { padding: 6px 12px; border:1px solid #e5e7eb; background:#f8fafc; border-radius:8px; cursor:pointer; }
+    button:hover { background:#eef2ff; }
+    input[type="file"] { font-size: 14px; }
+    .badge { font-size: 12px; padding: 2px 6px; border-radius: 999px; border:1px solid #e5e7eb; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <input type="file" id="csvFile" accept=".csv" />
+    <button id="saveLog">Save Log</button>
+    <button id="undoBtn">Undo</button>
+    <span class="badge" id="stageBadge">Stage: pick start</span>
+    <span class="hint">Clicks: start → end → (add horizontals). Press <b>Space</b> to log & clear.</span>
+  </div>
+
+  <div id="wrapper">
+    <div id="chart"></div>
+    <div id="overlay"></div>
+  </div>
+
+  <script>
+    const chartEl = document.getElementById('chart');
+    const overlay = document.getElementById('overlay');
+    const stageBadge = document.getElementById('stageBadge');
+
+    // --- Chart setup ---
+    const chart = LightweightCharts.createChart(chartEl, {
+      layout: { background: { type: 'solid', color: '#fff' }, textColor: '#111' },
+      grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderVisible: false },
+      timeScale: { borderVisible: false },
+    });
+    const series = chart.addCandlestickSeries();
+
+    // --- State ---
+    let data = [];
+    let indexByTime = new Map();
+    let startTime = null;
+    let endTime = null;
+    let priceLines = [];
+    let logs = [];
+    const STAGES = { START: 0, END: 1, HLINES: 2 };
+    let stage = STAGES.START;
+    let lastAction = null;
+
+    function setStage(s) {
+      stage = s;
+      stageBadge.textContent = 'Stage: ' + (s === STAGES.START ? 'pick start' : s === STAGES.END ? 'pick end' : 'add horizontals');
+    }
+
+    // --- CSV parsing ---
+    function isDigits(s){ return s && Array.from(s).every(ch => ch >= '0' && ch <= '9'); }
+    function toSec(t){ return isDigits(t) ? Math.floor(+t) : Math.floor(new Date(t).getTime() / 1000); }
+    function parseCSV(text) {
+      const rows = text.replace(/\r/g, '').trim().split('\n');
+      return rows.slice(1).map(r => {
+        const parts = r.split(',');
+        const t = toSec((parts[0] || '').trim());
+        return { time: t, open: +parts[1], high: +parts[2], low: +parts[3], close: +parts[4] };
+      }).filter(d => Number.isFinite(d.time));
+    }
+
+    document.getElementById('csvFile').addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = evt => {
+        data = parseCSV(evt.target.result);
+        series.setData(data);
+        indexByTime = new Map(data.map((d,i)=>[d.time,i]));
+        clearAll(false);
+      };
+      reader.readAsText(file);
+    });
+
+    // --- Vertical lines rendering fix ---
+    function getCanvasLeftOffset() {
+      const canvas = chartEl.querySelector('canvas');
+      if (!canvas) return 0;
+      const canvasRect = canvas.getBoundingClientRect();
+      const overlayRect = overlay.getBoundingClientRect();
+      return canvasRect.left - overlayRect.left;
+    }
+
+    function renderVerticals() {
+      overlay.innerHTML = '';
+      const offset = getCanvasLeftOffset();
+      const drawLine = (time) => {
+        if (time == null) return;
+        const x = chart.timeScale().timeToCoordinate(time);
+        if (x == null || isNaN(x)) return;
+        const el = document.createElement('div');
+        el.className = 'vline';
+        el.style.left = Math.round(x + offset) + 'px';
+        overlay.appendChild(el);
+      };
+      if (startTime != null) drawLine(startTime);
+      if (endTime != null) drawLine(endTime);
+    }
+
+    chart.timeScale().subscribeVisibleTimeRangeChange(renderVerticals);
+    new ResizeObserver(renderVerticals).observe(chartEl);
+
+    // --- Horizontal lines ---
+    function addHorizontal(price) {
+      const pl = series.createPriceLine({
+        price,
+        color: 'rgba(41,121,255,0.9)',
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Solid,
+        axisLabelVisible: true,
+        title: ''
+      });
+      priceLines.push({ obj: pl, price });
+    }
+
+    // --- Clear / log ---
+    function clearAll(logIt = true) {
+      if (logIt && startTime != null && endTime != null) {
+        const si = indexByTime.get(startTime);
+        const ei = indexByTime.get(endTime);
+        if (si != null && ei != null) {
+          logs.push({ startIndex: Math.min(si,ei), endIndex: Math.max(si,ei), startTime, endTime, linePrices: priceLines.map(p=>p.price) });
+        }
+      }
+      priceLines.forEach(p => series.removePriceLine(p.obj));
+      priceLines = [];
+      startTime = null;
+      endTime = null;
+      renderVerticals();
+      setStage(STAGES.START);
+    }
+
+    // --- Interactions ---
+    chart.subscribeClick(param => {
+      if (!param || param.time == null || !param.point) return;
+      const t = param.time;
+      const price = series.coordinateToPrice(param.point.y);
+      if (price == null) return;
+
+      if (stage === STAGES.START) { startTime = t; renderVerticals(); setStage(STAGES.END); lastAction='start'; }
+      else if (stage === STAGES.END) { endTime = t; renderVerticals(); setStage(STAGES.HLINES); lastAction='end'; }
+      else if (stage === STAGES.HLINES) { addHorizontal(price); lastAction='hline'; }
+    });
+
+    // Undo button
+    document.getElementById('undoBtn').addEventListener('click', () => {
+      if (lastAction==='hline' && priceLines.length>0) {
+        const p = priceLines.pop(); series.removePriceLine(p.obj);
+      } else if (lastAction==='end' && endTime!=null) { endTime=null; renderVerticals(); setStage(STAGES.END); }
+      else if (lastAction==='start' && startTime!=null) { startTime=null; renderVerticals(); setStage(STAGES.START); }
+      lastAction=null;
+    });
+
+    function isTypingInInput(e){ const el=e.target;if(!el)return false;const t=(el.tagName||'').toLowerCase();return t==='input'||t==='textarea'||el.isContentEditable; }
+    window.addEventListener('keydown', e => { if(e.code==='Space'&&!isTypingInInput(e)){e.preventDefault(); clearAll(true);} });
+
+    document.getElementById('saveLog').addEventListener('click', ()=>{
+      const blob=new Blob([JSON.stringify(logs,null,2)],{type:'application/json'});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a'); a.href=url; a.download='ohlcv_labels.json'; document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>
