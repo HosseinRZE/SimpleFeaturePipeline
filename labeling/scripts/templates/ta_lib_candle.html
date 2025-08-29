@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>OHLC Candle Labeling Tool</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+:root { --bg:#ffffff; --fg:#111; --muted:#777; --accent:#e53935; --label:#2979ff; }
+html, body { height: 100%; margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+body { display:flex; flex-direction:column; background: var(--bg); color: var(--fg);}
+#controls { display:flex; gap:10px; align-items:center; padding:10px 12px; border-bottom:1px solid #e5e7eb; position:sticky; top:0; background: var(--bg); z-index:5;}
+#modeButtons { display:flex; gap:5px; margin-right:20px;}
+#modeButtons button.active { background:#2979ff; color:#fff;}
+#wrapper { position:relative; flex:1 1 auto;}
+#chart { width:100%; height:100%;}
+#overlay { position:absolute; top:0; left:0; right:0; bottom:0; pointer-events:none; z-index:9999; }
+.vline { position:absolute; top:0; bottom:0; width:2px; background: var(--accent); opacity:0.95; transform:translateX(-50%); }
+.label { position:absolute; font-size:14px; font-weight:bold; color:var(--label); text-align:center; transform:translateX(-50%);}
+#legendBox { padding:8px 12px; border-bottom:1px solid #e5e7eb; background:#fafafa; font-size:14px;}
+#legendBox label { display:inline-block; margin-right:12px; cursor:pointer; }
+#editBox {
+  position:absolute; background:#fff; border:1px solid #e5e7eb; padding:5px;
+  font-size:14px; display:none; z-index:10000;
+}
+#editBox input { width:80px; margin-right:5px;}
+#editBox button { margin-left:5px; }
+</style>
+</head>
+<body>
+<div id="controls">
+  <div id="modeButtons">
+    <button id="addModeBtn" class="active">Add</button>
+    <button id="editModeBtn">Edit</button>
+  </div>
+  <input type="file" id="csvFile" accept=".csv" />
+  <button id="saveLog">Save Log</button>
+  <button id="undoBtn">Undo</button>
+</div>
+<div id="legendBox">Loading legend...</div>
+<div id="wrapper">
+  <div id="chart"></div>
+  <div id="overlay"></div>
+  <div id="editBox">
+    <input type="text" id="editInput"/>
+    <button id="saveEdit">Save</button>
+    <button id="cancelEdit">Cancel</button>
+  </div>
+</div>
+
+<script>
+const chartEl = document.getElementById('chart');
+const overlay = document.getElementById('overlay');
+const editBox = document.getElementById('editBox');
+const editInput = document.getElementById('editInput');
+
+let addMode=true;
+
+document.getElementById('addModeBtn').addEventListener('click',()=>{
+  addMode=true;
+  document.getElementById('addModeBtn').classList.add('active');
+  document.getElementById('editModeBtn').classList.remove('active');
+});
+document.getElementById('editModeBtn').addEventListener('click',()=>{
+  addMode=false;
+  document.getElementById('editModeBtn').classList.add('active');
+  document.getElementById('addModeBtn').classList.remove('active');
+});
+
+const chart = LightweightCharts.createChart(chartEl, {
+  layout: { background: { type:'solid', color:'#fff' }, textColor:'#111' },
+  grid: { vertLines:{visible:false}, horzLines:{visible:false} },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  rightPriceScale:{ borderVisible:false },
+  timeScale:{ borderVisible:false }
+});
+const series = chart.addCandlestickSeries();
+
+let data=[], indexByTime=new Map();
+let vlineTime=null, currentLabel=null, lastAction=null;
+let visibleLegend={}, logs=[];
+
+// --- fetch legend ---
+fetch("/legend").then(r=>r.json()).then(legend=>{
+  document.getElementById('legendBox').innerHTML="";
+  for(const [letter,name] of Object.entries(legend)){
+    visibleLegend[letter]=false; // ALL legends start unchecked
+    const lbl=document.createElement('label');
+    lbl.innerHTML=`<input type="checkbox" data-letter="${letter}"/> ${letter}: ${name}`; // no 'checked' attribute
+    document.getElementById('legendBox').appendChild(lbl);
+  }
+});
+// --- CSV upload ---
+document.getElementById('csvFile').addEventListener('change', e=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const formData = new FormData();
+  formData.append("file", file);
+  fetch("/label",{method:"POST",body:formData}).then(r=>r.json()).then(json=>{
+    data=json.map(d=>({
+      time:/^\d+$/.test(d.timestamp)? +d.timestamp : Math.floor(new Date(d.timestamp).getTime()/1000),
+      open:+d.open, high:+d.high, low:+d.low, close:+d.close,
+      label:Array.isArray(d.label)?d.label:(d.label&&d.label!=="0"? [d.label]:[])
+    }));
+    indexByTime = new Map(data.map((d,i)=>[d.time,i]));
+    series.setData(data);
+    renderOverlay();
+  });
+});
+
+// --- overlay ---
+function getCanvasLeftOffset(){ 
+  const canvas = chartEl.querySelector('canvas'); 
+  if(!canvas) return 0;
+  return canvas.getBoundingClientRect().left - overlay.getBoundingClientRect().left;
+}
+
+function renderOverlay(){
+  overlay.innerHTML='';
+  if(vlineTime!=null && addMode){
+    const x=chart.timeScale().timeToCoordinate(vlineTime);
+    if(x!=null){
+      const offset=getCanvasLeftOffset();
+      const line=document.createElement('div');
+      line.className='vline';
+      line.style.left=Math.round(x+offset)+'px';
+      overlay.appendChild(line);
+    }
+  }
+  if(currentLabel && addMode){
+    const x=chart.timeScale().timeToCoordinate(vlineTime);
+    if(x!=null){ const offset=getCanvasLeftOffset(); currentLabel.div.style.left=Math.round(x+offset)+'px'; overlay.appendChild(currentLabel.div);}
+  }
+  data.forEach(d=>{
+    if(!d.label || d.label.length===0) return;
+    const x=chart.timeScale().timeToCoordinate(d.time);
+    const y=series.priceToCoordinate(d.high);
+    if(x==null || y==null) return;
+    const offset=getCanvasLeftOffset();
+    d.label.forEach((l,i)=>{
+      if(visibleLegend[l]===false) return;
+      const div = document.createElement("div");
+      div.className = "label";
+      div.textContent = l;
+      div.style.left = Math.round(x + offset) + "px";
+      div.style.top = Math.round(y - 18 * (i + 1)) + "px";
+      overlay.appendChild(div);
+    });
+  });
+}
+
+// --- chart click ---
+chart.subscribeClick(param=>{
+  if(!param || param.time==null) return;
+  const idx=indexByTime.get(param.time);
+  if(idx==null) return;
+  const d=data[idx];
+
+  if(addMode){
+    vlineTime=param.time;
+    currentLabel=null;
+    renderOverlay();
+  } else {
+    // edit mode: show edit box
+  // edit mode: show edit box
+  const rect = chartEl.getBoundingClientRect();
+  const x = chart.timeScale().timeToCoordinate(param.time);
+  const y = series.priceToCoordinate(d.high);
+  if (x == null || y == null) return;
+
+  editBox.style.left = Math.round(x + rect.left) + 'px';
+  editBox.style.top = Math.round(y - 30) + 'px';
+
+  // ONLY show labels that are currently visible
+  editInput.value = d.label.filter(l => visibleLegend[l] !== false).join(',');
+  
+  editBox.style.display = 'block';
+  editInput.focus();
+  editInput.dataset.time = param.time;
+}
+});
+
+// --- save/cancel edit ---
+document.getElementById('saveEdit').addEventListener('click',()=>{
+  const t=+editInput.dataset.time;
+  const idx=indexByTime.get(t);
+  if(idx!=null){
+    const newLabels=editInput.value.split(',').map(s=>s.trim()).filter(s=>s);
+    data[idx].label=newLabels;
+    newLabels.forEach(l=>{
+      if(!(l in visibleLegend)) visibleLegend[l]=true;
+    });
+  }
+  editBox.style.display='none';
+  renderOverlay();
+});
+document.getElementById('cancelEdit').addEventListener('click',()=>{
+  editBox.style.display='none';
+});
+
+// --- keyboard add mode ---
+window.addEventListener('keydown', e=>{
+  if(addMode && vlineTime!=null && e.key.length===1 && /^[a-zA-Z0-9]$/.test(e.key)){
+    const idx=indexByTime.get(vlineTime);
+    if(idx!=null){
+      if(!data[idx].label.includes(e.key)) data[idx].label.push(e.key);
+      const div=document.createElement('div'); div.className='label'; div.textContent=e.key;
+      currentLabel={div,char:e.key};
+      renderOverlay();
+    }
+  } else if(addMode && e.code==="Space"){ vlineTime=null; currentLabel=null; renderOverlay();}
+});
+
+// --- legend checkboxes ---
+document.getElementById('legendBox').addEventListener('change',e=>{
+  if(e.target.tagName!=="INPUT") return;
+  visibleLegend[e.target.dataset.letter]=e.target.checked;
+  renderOverlay();
+});
+
+// --- save/export ---
+document.getElementById('saveLog').addEventListener('click',()=>{
+  const exportData = data.map(d=>({...d,label:d.label.filter(l=>visibleLegend[l]!==false)})).filter(d=>d.label.length>0);
+  const blob=new Blob([JSON.stringify(exportData,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download='ohlcv_labels.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+});
+
+// --- undo ---
+document.getElementById('undoBtn').addEventListener('click',()=>{
+  if(lastAction==='label' && currentLabel){ overlay.removeChild(currentLabel.div); currentLabel=null;}
+  else if(lastAction==='vline' && vlineTime!=null){ vlineTime=null;}
+  lastAction=null;
+  renderOverlay();
+});
+
+chart.timeScale().subscribeVisibleTimeRangeChange(renderOverlay);
+new ResizeObserver(renderOverlay).observe(chartEl);
+</script>
+</body>
+</html>
