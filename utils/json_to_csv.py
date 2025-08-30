@@ -1,32 +1,25 @@
 import json
 import csv
-import os
+import io
 
-def json_to_csv(json_filename: str, csv_filename: str = None) -> str:
+def json_to_csv_in_memory(json_filename: str) -> str:
     """
-    Converts a JSON file to a CSV file.
+    Converts a JSON file to a CSV string in memory (no disk write).
 
-    :param json_filename: The path to the input JSON file.
-    :param csv_filename: The path to the output CSV file (optional). If None, a default filename is used.
-    :return: The path to the generated CSV file.
+    :param json_filename: Path to input JSON file.
+    :return: CSV content as a string.
     """
-    # If no CSV filename is provided, generate a default one based on the JSON filename
-    if csv_filename is None:
-        base_name = os.path.splitext(os.path.basename(json_filename))[0]
-        csv_filename = f"{base_name}.csv"
-    
-    # Read JSON data from the file
-    with open(json_filename, 'r') as file:
-        json_data = json.load(file)
+    # Load JSON data
+    with open(json_filename, 'r') as f:
+        json_data = json.load(f)
 
-    # Open the CSV file for writing
-    with open(csv_filename, mode='w', newline='') as file:
-        writer = csv.DictWriter(file, fieldnames=json_data[0].keys())
-        
-        # Write the header (field names)
-        writer.writeheader()
-        
-        # Write the data rows
-        writer.writerows(json_data)
+    # Use StringIO as an in-memory file
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=json_data[0].keys())
+    writer.writeheader()
+    writer.writerows(json_data)
 
-    return csv_filename
+    # Get CSV string
+    csv_content = output.getvalue()
+    output.close()
+    return csv_content
