@@ -6,7 +6,6 @@ from sklearn.metrics import classification_report, confusion_matrix
 from datetime import datetime
 from preprocess.classification_dif_seq import preprocess_sequences_csv
 from models.LSTM.lstm_dif_seq_class import LSTMClassifier
-import pandas as pd 
 from utils.print_batch import print_batch
 from utils.to_address import to_address
 from utils.json_to_csv import json_to_csv
