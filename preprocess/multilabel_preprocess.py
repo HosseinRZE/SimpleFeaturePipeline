@@ -197,9 +197,9 @@ def preprocess_csv_multilabel(
             X_train, X_val, y_train, y_val = train_test_split(
                 X_flat, y_encoded, test_size=test_size, random_state=random_state
             )
-            return X_train, y_train, X_val, y_val, mlb, df, feature_cols
+            return X_train, X_val, y_train, y_val, mlb, df, feature_cols  # 7 values
         else:
-            return X_flat, y_encoded, mlb, df, feature_cols
+            return X_flat, None, y_encoded, None, mlb, df, feature_cols  # 7 values
 
     if isinstance(n_candles, dict):
         dataset = MultiInputDataset(X, y_encoded)
