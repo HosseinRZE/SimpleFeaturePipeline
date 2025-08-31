@@ -8,11 +8,15 @@ lightning_logs/
 
 # Ignore everything inside models/ EXCEPT what we whitelist
 models/**
-!models/LSTM/
-!models/transformer/
-!models/XGboost/
+# Allow specific subfolders
+!models/LSTM/**
+!models/transformer/**
+!models/XGboost/**
 !models/*.py
 !models/*.md
 !models/README
 # Data folder
 data/**/*
+# Playground: ignore all except notebooks
+play_ground/**
+!play_ground/*.ipynb
