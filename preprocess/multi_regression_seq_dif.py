@@ -79,7 +79,7 @@ def preprocess_sequences_csv_multilines(
                 X_dict_list[key].append(sub_df.iloc[row['startIndex']:row['endIndex'] + 1].values)
 
     # --- Pad y_list (linePrices targets) ---
-    max_len_y = max(len(arr) for arr in y_list)
+    max_len_y = max(len(arr) for arr in y_list) 
     y = np.zeros((len(y_list), max_len_y), dtype=np.float32)
     for i, arr in enumerate(y_list):
         y[i, :len(arr)] = arr
@@ -148,9 +148,9 @@ def preprocess_sequences_csv_multilines(
                     test_size=test_size,
                     random_state=random_state
                 )
-                return X_train, y_train, X_val, y_val, df_labels, feature_cols
+                return X_train, y_train, X_val, y_val, df_labels, feature_cols,max_len_y
             else:
-                return X_flat, y, df_labels, feature_cols
+                return X_flat, y, df_labels, feature_cols,max_len_y
     # ======================================================
 
     # --- Create Torch dataset ---
@@ -170,7 +170,7 @@ def preprocess_sequences_csv_multilines(
             X_val_dict   = {k: v[idx_val]   for k,v in X_dict.items()}
             return (MultiInputDataset(X_train_dict, y[idx_train]),
                     MultiInputDataset(X_val_dict, y[idx_val]),
-                    df_labels, feature_cols)
+                    df_labels, feature_cols, max_len_y)
         else:
             X_train = X_tensor[idx_train]
             X_val   = X_tensor[idx_val]
@@ -178,6 +178,6 @@ def preprocess_sequences_csv_multilines(
             y_val   = y_tensor[idx_val]
             return (TensorDataset(X_train, y_train),
                     TensorDataset(X_val, y_val),
-                    df_labels, feature_cols)
+                    df_labels, feature_cols, max_len_y)
     else:
-        return dataset, df_labels, feature_cols
+        return dataset, df_labels, feature_cols, max_len_y
