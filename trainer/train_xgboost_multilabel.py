@@ -45,7 +45,7 @@ def train_model_xgb_multilabel(
     learning_rate=0.05,
     subsample=0.8,
     colsample_bytree=0.8,
-    save_model=True,
+    save_model=False,
     return_val_accuracy=True,
     **model_params
 ):
