@@ -109,7 +109,6 @@ def train_model(
     meta_out  = f"{model_out_dir}/lstm_meta_class_{timestamp}.pkl"
 
     # --- Get dataset(s) ---
-    # --- Get dataset(s) ---
     if do_validation:
         train_ds, val_ds, label_encoder, df, feature_cols = preprocess_csv(
             data_csv, labels_csv,
