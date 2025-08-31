@@ -49,7 +49,7 @@ def train_model(
     labels_json=None,
     model_out_dir="models/saved_models",
     do_validation=True,
-    seq_len=3,
+    seq_len=1,
     hidden_dim=10,
     num_layers=1,
     lr=0.001,
@@ -79,13 +79,13 @@ def train_model(
         train_ds, val_ds, label_encoder, df, feature_cols = preprocess_csv_multilabel(
             data_csv, labels_csv,
             n_candles=seq_len,
-            val_split=True,
+            val_split=True,debug_sample=True
         )
     else:
         full_dataset, label_encoder, df, feature_cols = preprocess_csv_multilabel(
             data_csv, labels_csv,
             n_candles=seq_len,
-            val_split=False,
+            val_split=False,debug_sample=True
         )
 
     # --- Model config ---
