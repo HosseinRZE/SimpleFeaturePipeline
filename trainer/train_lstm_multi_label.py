@@ -15,6 +15,40 @@ from utils.json_to_csv import json_to_csv_in_memory  # <-- new util
 
 
 def evaluate_model(model, val_loader, mlb, threshold=0.2):
+    """
+    Evaluate a trained multi-label LSTM model on a validation dataset.
+
+    This function computes predictions from the model, converts them into
+    binary labels using a specified threshold, and reports several metrics
+    to assess performance in a multi-label classification setting.
+
+    Args:
+        model (torch.nn.Module): The trained LSTM multi-label classifier.
+        val_loader (torch.utils.data.DataLoader): Validation data loader.
+        mlb (sklearn.preprocessing.MultiLabelBinarizer): Fitted label binarizer
+            used to encode the labels.
+        threshold (float, optional): Probability threshold to convert sigmoid
+            outputs to binary labels (default is 0.2).
+
+    Prints:
+        - Multi-label classification report (precision, recall, F1-score) per label.
+        - Multi-label confusion matrix for each label.
+        - Exact match ratio: fraction of samples where all labels are predicted correctly.
+        - Micro accuracy: fraction of individual label predictions that are correct across all samples.
+
+    Returns:
+        tuple:
+            val_acc_exact (float): Exact match ratio across all samples.
+            val_acc_micro (float): Micro accuracy per label.
+
+    Notes:
+        - Exact match ratio is stricter than micro accuracy; it requires all labels
+          of a sample to be predicted correctly.
+        - Micro accuracy gives a single number summarizing the overall label-wise
+          prediction accuracy, useful for comparing models across datasets.
+        - The classification report uses `zero_division=0` to avoid undefined metrics
+          for labels with no predictions or no true samples.
+    """
     model.eval()
     all_preds, all_labels = [], []
 
@@ -41,7 +75,12 @@ def evaluate_model(model, val_loader, mlb, threshold=0.2):
     # exact match ratio across all samples
     val_acc_exact = np.all(all_preds == all_labels, axis=1).mean()
     print("\nExact match ratio:", val_acc_exact)
-    return val_acc_exact
+
+    # micro accuracy per label
+    val_acc_micro = (all_preds == all_labels).mean()
+    print("Micro accuracy (per-label):", val_acc_micro)
+
+    return val_acc_exact, val_acc_micro
 
 
 def train_model(
@@ -55,7 +94,7 @@ def train_model(
     lr=0.001,
     batch_size=32,
     max_epochs=200,
-    save_model=True,
+    save_model=False,
     return_val_accuracy=True,
     test_mode=False,
 ):
@@ -141,9 +180,9 @@ def train_model(
         print(f"✅ Meta saved to {meta_out}")
 
     # --- Validation accuracy ---
-    val_acc = None
+    val_acc_exact, val_acc_micro = None, None
     if do_validation:
-        val_acc = evaluate_model(model, val_loader, label_encoder)
+        val_acc_exact, val_acc_micro = evaluate_model(model, val_loader, label_encoder)
 
 
 if __name__ == "__main__":
