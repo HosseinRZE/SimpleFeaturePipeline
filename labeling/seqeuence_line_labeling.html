@@ -166,21 +166,29 @@
     }
 
     // --- Clear / log ---
-    function clearAll(logIt = true) {
-      if (logIt && startTime != null && endTime != null) {
-        const si = indexByTime.get(startTime);
-        const ei = indexByTime.get(endTime);
-        if (si != null && ei != null) {
-          logs.push({ startIndex: Math.min(si,ei), endIndex: Math.max(si,ei), startTime, endTime, linePrices: priceLines.map(p=>p.price) });
-        }
-      }
-      priceLines.forEach(p => series.removePriceLine(p.obj));
-      priceLines = [];
-      startTime = null;
-      endTime = null;
-      renderVerticals();
-      setStage(STAGES.START);
+function clearAll(logIt = true) {
+  if (logIt && startTime != null && endTime != null) {
+    const si = indexByTime.get(startTime);
+    const ei = indexByTime.get(endTime);
+    if (si != null && ei != null) {
+      const closeAtEnd = data[ei].close;
+      logs.push({
+        startIndex: Math.min(si, ei),
+        endIndex: Math.max(si, ei),
+        startTime,
+        endTime,
+        linePrices: priceLines.map(p => p.price / closeAtEnd)
+      });
     }
+  }
+  priceLines.forEach(p => series.removePriceLine(p.obj));
+  priceLines = [];
+  startTime = null;
+  endTime = null;
+  renderVerticals();
+  setStage(STAGES.START);
+}
+
 
     // --- Interactions ---
     chart.subscribeClick(param => {
@@ -206,12 +214,41 @@
     function isTypingInInput(e){ const el=e.target;if(!el)return false;const t=(el.tagName||'').toLowerCase();return t==='input'||t==='textarea'||el.isContentEditable; }
     window.addEventListener('keydown', e => { if(e.code==='Space'&&!isTypingInInput(e)){e.preventDefault(); clearAll(true);} });
 
-    document.getElementById('saveLog').addEventListener('click', ()=>{
-      const blob=new Blob([JSON.stringify(logs,null,2)],{type:'application/json'});
-      const url=URL.createObjectURL(blob);
-      const a=document.createElement('a'); a.href=url; a.download='ohlcv_labels.json'; document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
+document.getElementById('saveLog').addEventListener('click', () => {
+    if (logs.length === 0) return alert('No logs to save');
+
+    // Collect all horizontal line indices to handle variable number
+    const maxLines = Math.max(...logs.map(l => l.linePrices.length));
+
+    // CSV header
+    let csv = ['startTime,endTime,startIndex,endIndex'];
+    for (let i = 0; i < maxLines; i++) csv.push(`linePrice_${i+1}`);
+    csv = [csv.join(',')];
+
+    // CSV rows
+    logs.forEach(l => {
+        const row = [
+            l.startTime,
+            l.endTime,
+            l.startIndex,
+            l.endIndex,
+            ...l.linePrices.map(p => p.toFixed(6)), // normalized price
+        ];
+        // pad missing linePrices
+        while (row.length < maxLines + 4) row.push('');
+        csv.push(row.join(','));
     });
+
+    const blob = new Blob([csv.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'ohlcv_labels.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+});
   </script>
 </body>
 </html>
