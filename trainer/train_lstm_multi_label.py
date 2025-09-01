@@ -12,56 +12,24 @@ from preprocess.multilabel_preprocess import preprocess_csv_multilabel
 from models.LSTM.lstm_multi_label import LSTMMultiLabelClassifier
 from utils.print_batch import print_batch
 from utils.json_to_csv import json_to_csv_in_memory  # <-- new util
+from utils.multilabel_threshold_tuning import tune_thresholds_nn
 
-
-def evaluate_model(model, val_loader, mlb, threshold=0.2):
-    """
-    Evaluate a trained multi-label LSTM model on a validation dataset.
-
-    This function computes predictions from the model, converts them into
-    binary labels using a specified threshold, and reports several metrics
-    to assess performance in a multi-label classification setting.
-
-    Args:
-        model (torch.nn.Module): The trained LSTM multi-label classifier.
-        val_loader (torch.utils.data.DataLoader): Validation data loader.
-        mlb (sklearn.preprocessing.MultiLabelBinarizer): Fitted label binarizer
-            used to encode the labels.
-        threshold (float, optional): Probability threshold to convert sigmoid
-            outputs to binary labels (default is 0.2).
-
-    Prints:
-        - Multi-label classification report (precision, recall, F1-score) per label.
-        - Multi-label confusion matrix for each label.
-        - Exact match ratio: fraction of samples where all labels are predicted correctly.
-        - Micro accuracy: fraction of individual label predictions that are correct across all samples.
-
-    Returns:
-        tuple:
-            val_acc_exact (float): Exact match ratio across all samples.
-            val_acc_micro (float): Micro accuracy per label.
-
-    Notes:
-        - Exact match ratio is stricter than micro accuracy; it requires all labels
-          of a sample to be predicted correctly.
-        - Micro accuracy gives a single number summarizing the overall label-wise
-          prediction accuracy, useful for comparing models across datasets.
-        - The classification report uses `zero_division=0` to avoid undefined metrics
-          for labels with no predictions or no true samples.
-    """
+def evaluate_model(model, val_loader, mlb, threshold=0.2, return_probs=False):
     model.eval()
-    all_preds, all_labels = [], []
+    all_preds, all_labels, all_probs = [], [], []
 
     with torch.no_grad():
         for X_batch, y_batch in val_loader:
             logits = model(X_batch)
-            probs = torch.sigmoid(logits)          # multi-label probabilities
-            preds = (probs >= threshold).int()     # convert to binary 0/1
+            probs = torch.sigmoid(logits)
+            preds = (probs >= threshold).int()
             all_preds.append(preds.cpu().numpy())
             all_labels.append(y_batch.cpu().numpy())
+            all_probs.append(probs.cpu().numpy())
 
     all_preds = np.vstack(all_preds)
     all_labels = np.vstack(all_labels)
+    all_probs = np.vstack(all_probs)
 
     print("\n📊 Validation Report (Multi-label):")
     print(classification_report(all_labels, all_preds, target_names=mlb.classes_, zero_division=0))
@@ -72,15 +40,16 @@ def evaluate_model(model, val_loader, mlb, threshold=0.2):
         print(f"\nClass '{cls}':")
         print(mcm[i])
 
-    # exact match ratio across all samples
     val_acc_exact = np.all(all_preds == all_labels, axis=1).mean()
-    print("\nExact match ratio:", val_acc_exact)
-
-    # micro accuracy per label
     val_acc_micro = (all_preds == all_labels).mean()
+    print("\nExact match ratio:", val_acc_exact)
     print("Micro accuracy (per-label):", val_acc_micro)
 
-    return val_acc_exact, val_acc_micro
+    if return_probs:
+        return val_acc_exact, val_acc_micro, all_probs
+    else:
+        return val_acc_exact, val_acc_micro
+
 
 
 def train_model(
@@ -113,23 +82,28 @@ def train_model(
     else:
         raise ValueError("labels_json must be provided")
 
-    # --- Get dataset(s) ---
+        # --- Get dataset(s) ---
     if do_validation:
-        train_ds, val_ds, label_encoder, df, feature_cols = preprocess_csv_multilabel(
+        train_ds, val_ds, label_encoder, df, feature_cols, label_weights = preprocess_csv_multilabel(
             data_csv, labels_csv,
             n_candles=seq_len,
-            val_split=True,debug_sample=True
+            val_split=True,
+            debug_sample=True,
+            label_weighting="none"  # or "none", or {"i": 2}
         )
     else:
-        full_dataset, label_encoder, df, feature_cols = preprocess_csv_multilabel(
+        full_dataset, label_encoder, df, feature_cols, label_weights = preprocess_csv_multilabel(
             data_csv, labels_csv,
             n_candles=seq_len,
-            val_split=False,debug_sample=True
-        )
+            val_split=False,
+            debug_sample=True,
+            label_weighting="none"
+        )   
 
     # --- Model config ---
     input_dim = train_ds[0][0].shape[1] if do_validation else full_dataset[0][0].shape[1]
     num_classes = len(label_encoder.classes_)
+    label_weights_tensor = torch.tensor(label_weights, dtype=torch.float32)
 
     model = LSTMMultiLabelClassifier(
         input_dim=input_dim,
@@ -137,6 +111,7 @@ def train_model(
         num_layers=num_layers,
         num_classes=num_classes,
         lr=lr,
+        label_weights_tensor=label_weights_tensor
     )
 
     # --- DataLoaders ---
@@ -182,7 +157,29 @@ def train_model(
     # --- Validation accuracy ---
     val_acc_exact, val_acc_micro = None, None
     if do_validation:
-        val_acc_exact, val_acc_micro = evaluate_model(model, val_loader, label_encoder)
+        # --- Step 1: Evaluate with default threshold ---
+        val_acc_exact_default, val_acc_micro_default, y_probs = evaluate_model(
+            model, val_loader, label_encoder, threshold=0.5, return_probs=True
+        )
+
+        # --- Step 2: Tune thresholds per label ---
+        optimal_thresholds = tune_thresholds_nn(
+            y_true=np.vstack([y for _, y in val_loader.dataset]),
+            y_probs=y_probs
+        )
+        print("\n📌 Optimal thresholds per label:", dict(zip(label_encoder.classes_, optimal_thresholds)))
+
+        # --- Step 3: Evaluate again with tuned thresholds ---
+        val_acc_exact_tuned, val_acc_micro_tuned, _ = evaluate_model(
+            model, val_loader, label_encoder, threshold=0.5, return_probs=True
+        )
+        # Apply per-label thresholds manually
+        y_pred_tuned = (y_probs >= np.array(optimal_thresholds)).astype(int)
+        val_acc_exact_tuned = np.all(y_pred_tuned == np.vstack([y for _, y in val_loader.dataset]), axis=1).mean()
+        val_acc_micro_tuned = (y_pred_tuned == np.vstack([y for _, y in val_loader.dataset])).mean()
+
+        print(f"\n✅ Validation before tuning: Exact={val_acc_exact_default:.3f}, Micro={val_acc_micro_default:.3f}")
+        print(f"✅ Validation after tuning: Exact={val_acc_exact_tuned:.3f}, Micro={val_acc_micro_tuned:.3f}")
 
 
 if __name__ == "__main__":
@@ -190,4 +187,5 @@ if __name__ == "__main__":
         data_csv="data/Bitcoin_BTCUSDT_kaggle_1D_candles_prop.csv",
         labels_json="data/candle_labels.json",  # JSON labels, no CSV needed on disk
         do_validation=True,
+        label_weighting="scale_pos"
     )

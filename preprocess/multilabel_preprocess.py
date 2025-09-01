@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import TensorDataset, Dataset
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MultiLabelBinarizer
-
+from utils.weightening import get_label_weights
 
 # --- MultiInputDataset for dict of sequences ---
 class MultiInputDataset(Dataset):
@@ -72,7 +72,8 @@ def preprocess_csv_multilabel(
     random_state=42,
     for_xgboost=False,
     feature_pipeline=None,
-    debug_sample=False
+    debug_sample=False,
+    label_weighting="none"
 ):
     """
     Preprocess OHLCV data + labels into supervised format for MULTI-LABEL classification.
@@ -170,6 +171,8 @@ def preprocess_csv_multilabel(
     mlb = MultiLabelBinarizer()
     y_encoded = mlb.fit_transform(y_clean)
 
+    # --- Compute label weights ---
+    label_weights = get_label_weights(y_encoded, mlb, label_weighting)
     # --- DEBUG SAMPLE PRINT ---
     if debug_sample is not False:
         print("\n=== DEBUG SAMPLE CHECK (MULTI-LABEL) ===")
@@ -197,9 +200,9 @@ def preprocess_csv_multilabel(
             X_train, X_val, y_train, y_val = train_test_split(
                 X_flat, y_encoded, test_size=test_size, random_state=random_state
             )
-            return X_train, X_val, y_train, y_val, mlb, df, feature_cols  # 7 values
+            return X_train, X_val, y_train, y_val, mlb, df, feature_cols,label_weights  # 7 values
         else:
-            return X_flat, None, y_encoded, None, mlb, df, feature_cols  # 7 values
+            return X_flat, None, y_encoded, None, mlb, df, feature_cols,label_weights  # 7 values
 
     if isinstance(n_candles, dict):
         dataset = MultiInputDataset(X, y_encoded)
@@ -231,6 +234,7 @@ def preprocess_csv_multilabel(
                 mlb,
                 df,
                 feature_cols,
+                label_weights
             )
         else:
-            return dataset, mlb, df, feature_cols
+            return dataset, mlb, df, feature_cols,label_weights
