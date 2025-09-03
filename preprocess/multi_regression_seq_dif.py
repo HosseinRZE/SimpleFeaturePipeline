@@ -33,6 +33,7 @@ def preprocess_sequences_csv_multilines(
 ):
     """
     Preprocess main data + linePrices sequences from labels_csv for variable-length multi-line regression.
+    Sort linePrices to make training permutation-invariant.
     """
 
     # --- Load main CSV ---
@@ -42,11 +43,10 @@ def preprocess_sequences_csv_multilines(
     # --- Load labels ---
     df_labels = pd.read_csv(labels_csv)
     df_labels['startTime'] = pd.to_datetime(df_labels['startTime'], unit='s')
-    df_labels['endTime'] = pd.to_datetime(df_labels['endTime'], unit='s')
+    df_labels['endTime']   = pd.to_datetime(df_labels['endTime'], unit='s')
 
-    # Parse linePrices if stored as string
-    if isinstance(df_labels.loc[0, 'linePrices'], str):
-        df_labels['linePrices'] = df_labels['linePrices'].apply(ast.literal_eval)
+    # --- Collect linePrices columns ---
+    lineprice_cols = [c for c in df_labels.columns if c.startswith("linePrice")]
 
     # --- Apply feature pipeline if any ---
     extra_dicts = {}
@@ -69,7 +69,11 @@ def preprocess_sequences_csv_multilines(
         main_feats = [c for c in subseq.columns if c != 'timestamp']
         main_seq = subseq[main_feats].values
 
-        line_prices = np.array(row['linePrices'], dtype=np.float32)
+        # Collect line prices from multiple columns
+        line_prices = row[lineprice_cols].dropna().values.astype(np.float32)
+
+        # --- SORT line prices to make training permutation-invariant ---
+        line_prices = np.sort(line_prices)
 
         X_list.append(main_seq)
         y_list.append(line_prices)
@@ -78,8 +82,11 @@ def preprocess_sequences_csv_multilines(
             for key, sub_df in extra_dicts.items():
                 X_dict_list[key].append(sub_df.iloc[row['startIndex']:row['endIndex'] + 1].values)
 
+    # --- Collect true lengths before padding ---
+    seq_lengths_true = [len(arr) for arr in y_list]
+
     # --- Pad y_list (linePrices targets) ---
-    max_len_y = max(len(arr) for arr in y_list) 
+    max_len_y = max(seq_lengths_true)
     y = np.zeros((len(y_list), max_len_y), dtype=np.float32)
     for i, arr in enumerate(y_list):
         y[i, :len(arr)] = arr
@@ -102,9 +109,9 @@ def preprocess_sequences_csv_multilines(
     else:
         X_dict = None
 
-    feature_cols = ["linePrices"]
+    feature_cols = [c for c in df_data.columns if c != 'timestamp']
 
-    # ======================================================
+
     # --- Debug sample print ---
     if debug_sample is not False:
         print("\n=== DEBUG SAMPLE CHECK ===")
@@ -122,9 +129,7 @@ def preprocess_sequences_csv_multilines(
                 print("Shape:", X_main[idx].shape)
                 print("First few rows:\n", X_main[idx][:5])
         print("==========================\n")
-    # ======================================================
 
-    # ======================================================
     # --- For XGBoost mode ---
     if for_xgboost:
         if n_candles:
@@ -148,10 +153,9 @@ def preprocess_sequences_csv_multilines(
                     test_size=test_size,
                     random_state=random_state
                 )
-                return X_train, y_train, X_val, y_val, df_labels, feature_cols,max_len_y
+                return X_train, y_train, X_val, y_val, df_labels, feature_cols, max_len_y, seq_lengths_true
             else:
-                return X_flat, y, df_labels, feature_cols,max_len_y
-    # ======================================================
+                return X_flat, y, df_labels, feature_cols, max_len_y, seq_lengths_true
 
     # --- Create Torch dataset ---
     if n_candles:

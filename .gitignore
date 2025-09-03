@@ -18,5 +18,7 @@ models/**
 # Data folder
 data/**/*
 # Playground: ignore all except notebooks
-play_ground/**
-!play_ground/*.ipynb
+play_grounds/**
+play_grounds/models/saved_models/**
+!play_grounds/templates/**
+!play_grounds/*.ipynb

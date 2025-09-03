@@ -146,8 +146,7 @@ def train_model(
 if __name__ == "__main__":
     train_model(
         "/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles_prop.csv",
-        to_address(pd.read_csv(io.StringIO(
-            json_to_csv_in_memory("/home/iatell/projects/meta-learning/data/line_sequence.json")
-        ))),
+        "/home/iatell/projects/meta-learning/data/seq_line_labels.csv",
+
         do_validation=True
     )
