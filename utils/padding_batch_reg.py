@@ -1,26 +1,30 @@
 from torch.nn.utils.rnn import pad_sequence
 import torch
 
+from torch.nn.utils.rnn import pad_sequence
+
 def collate_batch(batch):
     """
     Pads variable-length sequences in the batch.
-
-    Args:
-        batch: list of tuples (X, y), where
-               - X: Tensor of shape (seq_len, feature_dim)
-               - y: Tensor of shape (seq_len_y,) or (max_len_y,) with line prices
-    Returns:
-        padded_X: Tensor of shape (batch, max_seq_len, feature_dim)
-        padded_y: Tensor of shape (batch, max_len_y)
-        lengths:  Tensor of original input sequence lengths
+    Supports both single-tensor and dict-of-tensors features.
     """
     Xs, ys = zip(*batch)
-    lengths = [x.size(0) for x in Xs]
 
-    # Pad input sequences
-    padded_X = pad_sequence(Xs, batch_first=True)  # (batch, max_seq_len, feature_dim)
+    if isinstance(Xs[0], dict):
+        # Dict of feature groups
+        collated_X = {}
+        lengths = None
+        for key in Xs[0].keys():
+            seqs = [x[key] for x in Xs]  # list of tensors
+            lengths = [s.size(0) for s in seqs]  # same for all groups
+            collated_X[key] = pad_sequence(seqs, batch_first=True)
+    else:
+        # Single tensor features
+        lengths = [x.size(0) for x in Xs]
+        collated_X = pad_sequence(Xs, batch_first=True)
 
-    # Pad output (line price sequences)
-    padded_y = pad_sequence(ys, batch_first=True)  # (batch, max_len_y)
+    ys = torch.stack(ys)
+    lengths = torch.tensor(lengths, dtype=torch.long)
 
-    return padded_X, padded_y, torch.tensor(lengths)
+    return collated_X, ys, lengths
+

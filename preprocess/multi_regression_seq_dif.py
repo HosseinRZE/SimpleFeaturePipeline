@@ -32,61 +32,73 @@ def preprocess_sequences_csv_multilines(
     n_candles=None
 ):
     """
-    Preprocess main data + linePrices sequences from labels_csv for variable-length multi-line regression.
-    Sort linePrices to make training permutation-invariant.
+    Preprocess main data + linePrices sequences for multi-line regression.
+    Tracks real columns after pipeline transformations.
+    Normalizes BEFORE padding.
     """
+    import pandas as pd
+    import numpy as np
+    from sklearn.model_selection import train_test_split
 
-    # --- Load main CSV ---
     df_data = pd.read_csv(data_csv)
     df_data['timestamp'] = pd.to_datetime(df_data['timestamp'])
-
-    # --- Load labels ---
     df_labels = pd.read_csv(labels_csv)
     df_labels['startTime'] = pd.to_datetime(df_labels['startTime'], unit='s')
     df_labels['endTime']   = pd.to_datetime(df_labels['endTime'], unit='s')
-
-    # --- Collect linePrices columns ---
     lineprice_cols = [c for c in df_labels.columns if c.startswith("linePrice")]
 
-    # --- Apply feature pipeline if any ---
-    extra_dicts = {}
+    # --- MODIFICATION 1: FIT SCALER GLOBALLY ---
+    # Fit the pipeline on the entire dataset first to learn global scaling params.
+    if feature_pipeline is not None:
+        feature_pipeline.fit(df_data)
+
+    # --- Apply global pipeline steps (as before) ---
     df_main = df_data.copy()
     if feature_pipeline is not None:
-        for func in feature_pipeline:
-            out = func(df_main)
-            if isinstance(out, tuple):
-                df_main, extra = out
-                extra_dicts.update(extra)
-            else:
-                df_main = out
+        for step, per_window in zip(feature_pipeline.steps, feature_pipeline.per_window_flags):
+            if not per_window:
+                df_main = step(df_main)
 
-    # --- Build sequences ---
+    # --- Build sequences (loop) ---
     X_list, y_list = [], []
-    X_dict_list = {k: [] for k in (extra_dicts.keys() if n_candles else [])}
+    real_feature_cols = None
 
     for _, row in df_labels.iterrows():
-        subseq = df_main.iloc[row['startIndex']:row['endIndex'] + 1]
+        subseq = df_main.iloc[row['startIndex']:row['endIndex'] + 1].copy()
+
+        # Apply per-window steps (as before)
+        if feature_pipeline is not None:
+            subseq = feature_pipeline.apply_window(subseq)
+
         main_feats = [c for c in subseq.columns if c != 'timestamp']
-        main_seq = subseq[main_feats].values
+        if real_feature_cols is None:
+            real_feature_cols = main_feats
 
-        # Collect line prices from multiple columns
+        # --- MODIFICATION 2: TRANSFORM SEQUENCES INDIVIDUALLY ---
+        # Normalize using the pre-fitted global scalers.
+        if feature_pipeline is not None:
+            norm_cfg = feature_pipeline.norm_methods.get("main", {})
+            norm_cols = [c for c in norm_cfg.keys() if c in subseq.columns]
+            if norm_cols:
+                subseq[norm_cols] = feature_pipeline._normalize_single(
+                    subseq[norm_cols],
+                    {k: v for k, v in norm_cfg.items() if k in norm_cols},
+                    fit=False,  
+                    dict_name="main"
+                )
+
+        X_list.append(subseq[main_feats].values)
+        
+        # --- Process linePrices (as before) ---
         line_prices = row[lineprice_cols].dropna().values.astype(np.float32)
-
-        # --- SORT line prices to make training permutation-invariant ---
         line_prices = np.sort(line_prices)
-
-        X_list.append(main_seq)
         y_list.append(line_prices)
 
-        if n_candles:
-            for key, sub_df in extra_dicts.items():
-                X_dict_list[key].append(sub_df.iloc[row['startIndex']:row['endIndex'] + 1].values)
-
-    # --- Collect true lengths before padding ---
+    # --- True lengths and max_len_y ---
     seq_lengths_true = [len(arr) for arr in y_list]
-
-    # --- Pad y_list (linePrices targets) ---
     max_len_y = max(seq_lengths_true)
+
+    # --- Pad y_list ---
     y = np.zeros((len(y_list), max_len_y), dtype=np.float32)
     for i, arr in enumerate(y_list):
         y[i, :len(arr)] = arr
@@ -101,87 +113,30 @@ def preprocess_sequences_csv_multilines(
         return out
 
     X_main = pad_sequences(X_list)
+    X_dict = {"main": X_main}
 
-    if n_candles:
-        X_dict = {"main": X_main}
-        for k, seqs in X_dict_list.items():
-            X_dict[k] = pad_sequences(seqs)
-    else:
-        X_dict = None
-
-    feature_cols = [c for c in df_data.columns if c != 'timestamp']
-
-
-    # --- Debug sample print ---
-    if debug_sample is not False:
-        print("\n=== DEBUG SAMPLE CHECK ===")
-        indices = [0] if debug_sample is True else (
-            [debug_sample] if isinstance(debug_sample, int) else list(debug_sample)
-        )
-        for idx in indices:
-            print(f"\n--- Sequence {idx} ---")
+    # --- Debug sample ---
+    if debug_sample:
+        print("\n=== DEBUG SAMPLE ===")
+        for idx in [0]:
             print("Label (linePrices padded):", y[idx])
-            if n_candles:
-                for k, v in X_dict.items():
-                    print(f"Feature group: {k}, Shape: {v[idx].shape}")
-                    print(v[idx][:5])
-            else:
-                print("Shape:", X_main[idx].shape)
-                print("First few rows:\n", X_main[idx][:5])
-        print("==========================\n")
+            for k, v in X_dict.items():
+                print(f"Feature group: {k}, Shape: {v[idx].shape}")
+                print("Columns:", real_feature_cols)
+                print(v[idx][:5])
+        print("===================")
 
-    # --- For XGBoost mode ---
-    if for_xgboost:
-        if n_candles:
-            X_flat_dict = {k: np.array([seq.flatten() for seq in v]) for k, v in X_dict.items()}
-            if val_split:
-                idx_train, idx_val = train_test_split(
-                    np.arange(len(y)), test_size=test_size, random_state=random_state
-                )
-                X_train_dict = {k: v[idx_train] for k, v in X_flat_dict.items()}
-                X_val_dict = {k: v[idx_val] for k, v in X_flat_dict.items()}
-                return (X_train_dict, y[idx_train],
-                        X_val_dict, y[idx_val],
-                        df_labels, feature_cols)
-            else:
-                return X_flat_dict, y, df_labels, feature_cols
-        else:
-            X_flat = np.array([seq.flatten() for seq in X_main])
-            if val_split:
-                X_train, X_val, y_train, y_val = train_test_split(
-                    X_flat, y,
-                    test_size=test_size,
-                    random_state=random_state
-                )
-                return X_train, y_train, X_val, y_val, df_labels, feature_cols, max_len_y, seq_lengths_true
-            else:
-                return X_flat, y, df_labels, feature_cols, max_len_y, seq_lengths_true
-
-    # --- Create Torch dataset ---
-    if n_candles:
-        dataset = MultiInputDataset(X_dict, y)
-    else:
-        X_tensor = torch.tensor(X_main, dtype=torch.float32)
-        y_tensor = torch.tensor(y, dtype=torch.float32)
-        dataset = TensorDataset(X_tensor, y_tensor)
+    # --- Torch dataset ---
+    dataset = MultiInputDataset(X_dict, y)
 
     # --- Train/Val split ---
     if val_split:
         idx_train, idx_val = train_test_split(np.arange(len(y)), test_size=test_size,
                                              random_state=random_state)
-        if n_candles:
-            X_train_dict = {k: v[idx_train] for k,v in X_dict.items()}
-            X_val_dict   = {k: v[idx_val]   for k,v in X_dict.items()}
-            return (MultiInputDataset(X_train_dict, y[idx_train]),
-                    MultiInputDataset(X_val_dict, y[idx_val]),
-                    df_labels, feature_cols, max_len_y)
-        else:
-            X_train = X_tensor[idx_train]
-            X_val   = X_tensor[idx_val]
-            y_train = y_tensor[idx_train]
-            y_val   = y_tensor[idx_val]
-            return (TensorDataset(X_train, y_train),
-                    TensorDataset(X_val, y_val),
-                    df_labels, feature_cols, max_len_y)
+        X_train_dict = {k: v[idx_train] for k,v in X_dict.items()}
+        X_val_dict   = {k: v[idx_val]   for k,v in X_dict.items()}
+        return (MultiInputDataset(X_train_dict, y[idx_train]),
+                MultiInputDataset(X_val_dict, y[idx_val]),
+                df_labels, real_feature_cols, max_len_y)
     else:
-        return dataset, df_labels, feature_cols, max_len_y
+        return dataset, df_labels, real_feature_cols, max_len_y
