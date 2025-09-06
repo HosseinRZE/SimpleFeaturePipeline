@@ -116,3 +116,20 @@ class FeaturePipeline:
 
     def __iter__(self):
         return iter(self.steps)
+
+    def export_config(self):
+        """
+        Serialize pipeline steps + normalization + flags.
+        """
+        steps_cfg = []
+        for step in self.steps:
+            steps_cfg.append({
+                "module": getattr(step, "_step_module", None),
+                "func": getattr(step, "_step_name", step.__name__),
+                "kwargs": getattr(step, "_step_kwargs", {})
+            })
+        return {
+            "steps": steps_cfg,
+            "norm_methods": self.norm_methods,
+            "per_window_flags": self.per_window_flags
+        }
