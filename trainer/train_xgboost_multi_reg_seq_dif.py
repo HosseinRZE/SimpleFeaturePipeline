@@ -9,11 +9,12 @@ import numpy as np
 import pandas as pd
 import warnings
 from sklearn.model_selection import train_test_split
-
+from utils.make_step import make_step
 from preprocess.multi_regression_seq_dif import preprocess_sequences_csv_multilines
 from add_ons.drop_column import drop_columns
-from add_ons.feature_pipeline import FeaturePipeline
-from add_ons.dif_seq_candles import add_label_normalized_candles
+from add_ons.feature_pipeline3 import FeaturePipeline
+from add_ons.normalize_candle_seq import add_label_normalized_candles
+from add_ons.candle_dif_seq import add_candle_differences
 # ---------------- Evaluation ---------------- #
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import numpy as np
@@ -96,12 +97,20 @@ def train_model_xgb_multireg(
     meta_out = f"{model_out_dir}/xgb_meta_multireg_{timestamp}.pkl"
 
     pipeline = FeaturePipeline(
-        steps=[lambda df: add_label_normalized_candles(df, labels_csv),
-        lambda df: drop_columns(df, ["volume","open","high","close","low"]),]
-               ,
-        norm_methods={"main": {"upper_shadow": "standard"}}
-    )
-
+        steps=[
+            make_step(add_label_normalized_candles),
+            make_step(add_candle_differences),
+            make_step(drop_columns, cols_to_drop=["open","high","low","close","volume"]),
+            
+        ],
+        norm_methods={
+            "main": {
+                "upper_shadow": "robust", "body": "standard", "lower_shadow": "standard",
+                "upper_body_ratio": "standard", "lower_body_ratio": "standard",
+                "upper_lower_body_ratio": "standard", "Candle_Color": "standard"
+            }
+        },
+        per_window_flags=[True, True, True])
     # --- Preprocess data ---
     if do_validation:
         X_train, y_train, X_val, y_val, df, feature_cols, max_len_y, seq_lengths_true = preprocess_sequences_csv_multilines(

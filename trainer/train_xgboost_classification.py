@@ -3,7 +3,7 @@ from datetime import datetime
 import xgboost as xgb
 from sklearn.metrics import classification_report, confusion_matrix
 from utils.print_batch import print_batch
-from add_ons.featue_pipeline2 import FeaturePipeline
+from add_ons.feature_pipeline2 import FeaturePipeline
 from add_ons.drop_column import drop_columns
 from add_ons.candle_proportion import add_candle_proportions
 from preprocess.classification_pre_dict import preprocess_csv

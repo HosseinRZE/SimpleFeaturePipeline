@@ -11,7 +11,7 @@ from add_ons.zigzag_single import add_zigzag
 from preprocess.classification_pre_dict import preprocess_csv
 from models.LSTM.multilstm_classification import MultiLSTMClassifier
 from itertools import islice
-from add_ons.featue_pipeline2 import FeaturePipeline
+from add_ons.feature_pipeline2 import FeaturePipeline
 
 
 # ----------------- Evaluation -----------------
