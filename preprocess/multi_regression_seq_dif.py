@@ -7,17 +7,25 @@ import ast
 
 
 class MultiInputDataset(Dataset):
-    def __init__(self, X_dict, y):
-        self.X_dict = {k: torch.tensor(v, dtype=torch.float32) for k, v in X_dict.items()}
-        self.y = torch.tensor(y, dtype=torch.float32)   # regression targets
+    def __init__(self, X_dict, y, x_lengths):
+        """
+        X_dict: dict mapping feature-group -> list of numpy arrays (variable-length per sample)
+        y: padded numpy array (n_samples, max_len_y)
+        x_lengths: list/array of true lengths for X (per-sample, before padding)
+        """
+        self.X_dict = X_dict  # keep lists of numpy arrays (one entry per sample)
+        self.y = torch.tensor(y, dtype=torch.float32)
+        self.x_lengths = torch.tensor(x_lengths, dtype=torch.long)
         self.length = len(y)
 
     def __len__(self):
         return self.length
 
     def __getitem__(self, idx):
-        sample = {k: v[idx] for k, v in self.X_dict.items()}
-        return sample, self.y[idx]
+        # Convert the variable-length arrays to tensors on access
+        sample = {k: torch.tensor(v[idx], dtype=torch.float32) for k, v in self.X_dict.items()}
+        return sample, self.y[idx], self.x_lengths[idx]
+
 
 
 def preprocess_sequences_csv_multilines(
@@ -33,8 +41,12 @@ def preprocess_sequences_csv_multilines(
 ):
     """
     Preprocess main data + linePrices sequences for multi-line regression.
-    Tracks real columns after pipeline transformations.
-    Normalizes BEFORE padding.
+
+    - Keeps variable-length X sequences (padding happens in collate_batch).
+    - Computes both x_lengths (true lengths of input sequences) and
+      label_lengths (true lengths of label sequences).
+    - If for_xgboost=True, returns (X_train, y_train, X_val, y_val, df_labels, feature_cols, max_len_y, label_lengths)
+      where label_lengths is the list of true label lengths for the whole dataset.
     """
     import pandas as pd
     import numpy as np
@@ -47,26 +59,25 @@ def preprocess_sequences_csv_multilines(
     df_labels['endTime']   = pd.to_datetime(df_labels['endTime'], unit='s')
     lineprice_cols = [c for c in df_labels.columns if c.startswith("linePrice")]
 
-    # --- MODIFICATION 1: FIT SCALER GLOBALLY ---
-    # Fit the pipeline on the entire dataset first to learn global scaling params.
+    # Fit pipeline globally (if provided)
     if feature_pipeline is not None:
         feature_pipeline.fit(df_data)
 
-    # --- Apply global pipeline steps (as before) ---
     df_main = df_data.copy()
     if feature_pipeline is not None:
         for step, per_window in zip(feature_pipeline.steps, feature_pipeline.per_window_flags):
             if not per_window:
                 df_main = step(df_main)
 
-    # --- Build sequences (loop) ---
-    X_list, y_list = [], []
+    X_list = []
+    y_list = []
+    x_lengths = []      # true input sequence lengths for each sample
+    label_lengths = []  # true label length (number of real label entries) for each sample
     real_feature_cols = None
 
     for _, row in df_labels.iterrows():
         subseq = df_main.iloc[row['startIndex']:row['endIndex'] + 1].copy()
 
-        # Apply per-window steps (as before)
         if feature_pipeline is not None:
             subseq = feature_pipeline.apply_window(subseq)
 
@@ -74,8 +85,6 @@ def preprocess_sequences_csv_multilines(
         if real_feature_cols is None:
             real_feature_cols = main_feats
 
-        # --- MODIFICATION 2: TRANSFORM SEQUENCES INDIVIDUALLY ---
-        # Normalize using the pre-fitted global scalers.
         if feature_pipeline is not None:
             norm_cfg = feature_pipeline.norm_methods.get("main", {})
             norm_cols = [c for c in norm_cfg.keys() if c in subseq.columns]
@@ -83,60 +92,55 @@ def preprocess_sequences_csv_multilines(
                 subseq[norm_cols] = feature_pipeline._normalize_single(
                     subseq[norm_cols],
                     {k: v for k, v in norm_cfg.items() if k in norm_cols},
-                    fit=False,  
+                    fit=False,
                     dict_name="main"
                 )
 
-        X_list.append(subseq[main_feats].values)
-        
-        # --- Process linePrices (as before) ---
+        arr = subseq[main_feats].values.astype(np.float32)
+        X_list.append(arr)
+        x_lengths.append(arr.shape[0])
+
+        # labels (linePrices) — these are already trimmed (dropna)
         line_prices = row[lineprice_cols].dropna().values.astype(np.float32)
         line_prices = np.sort(line_prices)
         y_list.append(line_prices)
+        label_lengths.append(line_prices.shape[0])
 
-    # --- True lengths and max_len_y ---
-    seq_lengths_true = [len(arr) for arr in y_list]
-    max_len_y = max(seq_lengths_true)
-
-    # --- Pad y_list ---
+    # Pad y globally (we keep labels padded for convenience)
+    max_len_y = max(len(arr) for arr in y_list) if len(y_list) > 0 else 0
     y = np.zeros((len(y_list), max_len_y), dtype=np.float32)
     for i, arr in enumerate(y_list):
         y[i, :len(arr)] = arr
 
-    # --- Pad sequences helper ---
-    def pad_sequences(seq_list):
-        max_len = max(len(s) for s in seq_list)
-        feat_dim = seq_list[0].shape[1]
-        out = np.zeros((len(seq_list), max_len, feat_dim), dtype=np.float32)
-        for i, s in enumerate(seq_list):
-            out[i, :len(s), :] = s
-        return out
+    # === XGBoost mode: return flattened features + label_lengths (true label lengths) ===
+    if for_xgboost:
+        # feature dimension:
+        feat_dim = X_list[0].shape[1] if len(X_list) > 0 else 0
+        # average-pool across time for each sample (if sample empty, zero vector)
+        X_flat = np.stack([
+            arr.mean(axis=0) if arr.shape[0] > 0 else np.zeros((feat_dim,), dtype=np.float32)
+            for arr in X_list
+        ])
+        if val_split:
+            idx_train, idx_val = train_test_split(np.arange(len(y)), test_size=test_size,
+                                                 random_state=random_state)
+            return (X_flat[idx_train], y[idx_train],
+                    X_flat[idx_val], y[idx_val],
+                    df_labels, real_feature_cols, max_len_y, label_lengths)
+        else:
+            return (X_flat, y, df_labels, real_feature_cols, max_len_y, label_lengths)
 
-    X_main = pad_sequences(X_list)
-    X_dict = {"main": X_main}
+    # === Torch dataset mode: keep variable-length X and return MultiInputDataset (x_lengths used) ===
+    dataset = MultiInputDataset({"main": X_list}, y, x_lengths)
 
-    # --- Debug sample ---
-    if debug_sample:
-        print("\n=== DEBUG SAMPLE ===")
-        for idx in [0]:
-            print("Label (linePrices padded):", y[idx])
-            for k, v in X_dict.items():
-                print(f"Feature group: {k}, Shape: {v[idx].shape}")
-                print("Columns:", real_feature_cols)
-                print(v[idx][:5])
-        print("===================")
-
-    # --- Torch dataset ---
-    dataset = MultiInputDataset(X_dict, y)
-
-    # --- Train/Val split ---
     if val_split:
         idx_train, idx_val = train_test_split(np.arange(len(y)), test_size=test_size,
                                              random_state=random_state)
-        X_train_dict = {k: v[idx_train] for k,v in X_dict.items()}
-        X_val_dict   = {k: v[idx_val]   for k,v in X_dict.items()}
-        return (MultiInputDataset(X_train_dict, y[idx_train]),
-                MultiInputDataset(X_val_dict, y[idx_val]),
+        X_train = {"main": [X_list[i] for i in idx_train]}
+        X_val   = {"main": [X_list[i] for i in idx_val]}
+
+        return (MultiInputDataset(X_train, y[idx_train], [x_lengths[i] for i in idx_train]),
+                MultiInputDataset(X_val,   y[idx_val],   [x_lengths[i] for i in idx_val]),
                 df_labels, real_feature_cols, max_len_y)
     else:
         return dataset, df_labels, real_feature_cols, max_len_y
