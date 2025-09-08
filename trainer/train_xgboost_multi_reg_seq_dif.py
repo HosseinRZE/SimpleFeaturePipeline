@@ -14,7 +14,7 @@ from preprocess.multi_regression_seq_dif import preprocess_sequences_csv_multili
 from add_ons.drop_column import drop_columns
 from add_ons.feature_pipeline3 import FeaturePipeline
 from add_ons.normalize_candle_seq import add_label_normalized_candles
-from add_ons.candle_dif_seq import add_candle_differences
+from add_ons.candle_dif_rate_of_change_percentage import add_candle_differences
 # ---------------- Evaluation ---------------- #
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import numpy as np

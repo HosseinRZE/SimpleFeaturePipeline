@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-def add_candle_differences(
+def add_candle_rocp(
     df,
     ohlc_cols=("open", "high", "low", "close"),
     suffix="_dif",
