@@ -10,11 +10,11 @@ import pandas as pd
 import warnings
 from sklearn.model_selection import train_test_split
 from utils.make_step import make_step
-from preprocess.multi_regression_seq_dif import preprocess_sequences_csv_multilines
+from preprocess.multi_regression_seq_dif2 import preprocess_sequences_csv_multilines
 from add_ons.drop_column import drop_columns
-from add_ons.feature_pipeline3 import FeaturePipeline
+from add_ons.feature_pipeline4 import FeaturePipeline
 from add_ons.normalize_candle_seq import add_label_normalized_candles
-from add_ons.candle_dif_rate_of_change_percentage import add_candle_rocp
+from add_ons.candle_dif_rate_of_change_percentage2 import add_candle_rocp
 from add_ons.candle_rate_of_change import add_candle_ratios
 # ---------------- Evaluation ---------------- #
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
@@ -177,16 +177,33 @@ def train_model_xgb_multireg(
     # --- Save models ---
     if save_model:
         os.makedirs(model_out_dir, exist_ok=True)
+        
+        # Save trained models
         joblib.dump(model, model_out)
         joblib.dump(xgb_len_model, length_model_out)
-        joblib.dump({
-            'feature_cols': feature_cols,
-            'target_dim': max_len_y
-        }, meta_out)
+        
+        # Save full metadata
+        meta_dict = {
+            "feature_cols": feature_cols,
+            "target_dim": max_len_y,
+            "n_estimators": n_estimators,
+            "max_depth": max_depth,
+            "learning_rate": learning_rate,
+            "subsample": subsample,
+            "colsample_bytree": colsample_bytree,
+            "model_params": model_params,
+            "scalers": pipeline.scalers,
+            "pipeline_config": pipeline.export_config(),
+            "multioutput_wrapper": {
+                "class": model.__class__.__name__,
+                "module": model.__class__.__module__,
+            }
+        }
+        joblib.dump(meta_dict, meta_out)
+        
         print(f"✅ Model saved to {model_out}")
         print(f"✅ Length predictor saved to {length_model_out}")
-        print(f"✅ Meta saved to {meta_out}")
-
+        print(f"✅ Metadata saved to {meta_out}")
     # --- Evaluate ---
     val_metrics = None
     if do_validation:
@@ -200,7 +217,7 @@ def train_model_xgb_multireg(
 if __name__ == "__main__":
     train_model_xgb_multireg(
         "data/Bitcoin_BTCUSDT_kaggle_1D_candles.csv",
-        "data/seq_line_labels.csv",
+        "data/line_seq_ordered.csv",
         do_validation=True,
         save_model=False
     )

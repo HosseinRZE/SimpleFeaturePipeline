@@ -34,7 +34,7 @@ def preprocess_sequences_csv_multilines(
     random_state=42,
     for_xgboost=False,
     debug_sample=False,
-    preserve_order = True
+    preserve_order = False
 ):
     """
     Preprocess main data + linePrices sequences for multi-line regression.
@@ -102,7 +102,6 @@ def preprocess_sequences_csv_multilines(
             y_list.append(line_prices)
             label_lengths.append((line_prices != 0).sum())  # count valid labels
         else:
-
             # labels (linePrices) — these are already trimmed (dropna)
             line_prices = row[lineprice_cols].dropna().values.astype(np.float32)
             line_prices = np.sort(line_prices)
