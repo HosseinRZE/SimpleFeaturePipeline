@@ -1,11 +1,10 @@
 import numpy as np
 import pandas as pd
+pd.set_option('future.no_silent_downcasting', True)
 import torch
 from torch.utils.data import TensorDataset, Dataset
 from sklearn.model_selection import train_test_split
 import ast
-
-
 class MultiInputDataset(Dataset):
     def __init__(self, X_dict, y, x_lengths):
         """
@@ -26,8 +25,6 @@ class MultiInputDataset(Dataset):
         sample = {k: torch.tensor(v[idx], dtype=torch.float32) for k, v in self.X_dict.items()}
         return sample, self.y[idx], self.x_lengths[idx]
 
-
-
 def preprocess_sequences_csv_multilines(
     data_csv,
     labels_csv,
@@ -37,7 +34,7 @@ def preprocess_sequences_csv_multilines(
     random_state=42,
     for_xgboost=False,
     debug_sample=False,
-    n_candles=None
+    preserve_order = True
 ):
     """
     Preprocess main data + linePrices sequences for multi-line regression.
@@ -99,12 +96,18 @@ def preprocess_sequences_csv_multilines(
         arr = subseq[main_feats].values.astype(np.float32)
         X_list.append(arr)
         x_lengths.append(arr.shape[0])
+        if preserve_order:
+            # labels (linePrices) — keep order, pad with -1.0 for missing
+            line_prices = row[lineprice_cols].fillna(0).values.astype(np.float32)
+            y_list.append(line_prices)
+            label_lengths.append((line_prices != 0).sum())  # count valid labels
+        else:
 
-        # labels (linePrices) — these are already trimmed (dropna)
-        line_prices = row[lineprice_cols].dropna().values.astype(np.float32)
-        line_prices = np.sort(line_prices)
-        y_list.append(line_prices)
-        label_lengths.append(line_prices.shape[0])
+            # labels (linePrices) — these are already trimmed (dropna)
+            line_prices = row[lineprice_cols].dropna().values.astype(np.float32)
+            line_prices = np.sort(line_prices)
+            y_list.append(line_prices)
+            label_lengths.append(line_prices.shape[0])
 
     # Pad y globally (we keep labels padded for convenience)
     max_len_y = max(len(arr) for arr in y_list) if len(y_list) > 0 else 0
@@ -121,6 +124,21 @@ def preprocess_sequences_csv_multilines(
             arr.mean(axis=0) if arr.shape[0] > 0 else np.zeros((feat_dim,), dtype=np.float32)
             for arr in X_list
         ])
+
+        # --- Debug print ---
+        if debug_sample is not False:
+            print("\n=== DEBUG SAMPLE CHECK (XGBoost mode) ===")
+            indices = [0] if debug_sample is True else (
+                [debug_sample] if isinstance(debug_sample, int) else list(debug_sample)
+            )
+            for idx in indices:
+                print(f"\n--- Sequence {idx} ---")
+                print("Label:", y_list[idx], "Encoded (padded):", y[idx])
+                print("Shape:", X_list[idx].shape)
+                print("First few rows of sequence:\n", X_list[idx][:])
+                print("Flattened feature vector (X_flat):", X_flat[idx])
+            print("==========================\n")
+
         if val_split:
             idx_train, idx_val = train_test_split(np.arange(len(y)), test_size=test_size,
                                                  random_state=random_state)
@@ -132,6 +150,19 @@ def preprocess_sequences_csv_multilines(
 
     # === Torch dataset mode: keep variable-length X and return MultiInputDataset (x_lengths used) ===
     dataset = MultiInputDataset({"main": X_list}, y, x_lengths)
+
+    # --- Debug print ---
+    if debug_sample is not False:
+        print("\n=== DEBUG SAMPLE CHECK (Torch mode) ===")
+        indices = [0] if debug_sample is True else (
+            [debug_sample] if isinstance(debug_sample, int) else list(debug_sample)
+        )
+        for idx in indices:
+            print(f"\n--- Sequence {idx} ---")
+            print("Label:", y_list[idx], "Encoded (padded):", y[idx])
+            print("Shape:", X_list[idx].shape)
+            print("First few rows of sequence:\n", X_list[idx][:5])
+        print("==========================\n")
 
     if val_split:
         idx_train, idx_val = train_test_split(np.arange(len(y)), test_size=test_size,

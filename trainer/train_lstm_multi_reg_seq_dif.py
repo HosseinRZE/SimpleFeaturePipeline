@@ -13,8 +13,8 @@ from utils.padding_batch_reg import collate_batch
 import pandas as pd
 import io
 import numpy as np
-
-# ---------------- Evaluation ---------------- #
+import os
+from sklearn.metrics import accuracy_score, f1_score
 # ---------------- Evaluation ---------------- #
 def evaluate_model(model, val_loader, threshold=0.5):
     model.eval()
@@ -51,7 +51,7 @@ def evaluate_model(model, val_loader, threshold=0.5):
     mae = np.abs(all_preds_reg - all_labels_reg).mean()
 
     # ----- Length metrics -----
-    from sklearn.metrics import accuracy_score, f1_score
+
 
     acc = accuracy_score(all_labels_len, all_preds_len)
     f1 = f1_score(all_labels_len, all_preds_len, average="macro")
@@ -77,12 +77,6 @@ def train_model(
     save_model=False,
     return_val_accuracy = True
 ):
-    from preprocess.multi_regression_seq_dif import preprocess_sequences_csv_multilines
-    from torch.utils.data import DataLoader, TensorDataset
-    import joblib
-    from datetime import datetime
-    import os
-    import numpy as np
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_out = f"{model_out_dir}/lstm_model_multireg_{timestamp}.pt"
