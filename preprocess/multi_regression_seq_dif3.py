@@ -69,8 +69,10 @@ def preprocess_sequences_csv_multilines(
     feature_cols = None
 
     for _, row in df_labels.iterrows():
-        mask = (feature_pipeline.main_data['timestamp'] >= row['startTime']) & (feature_pipeline.main_data['timestamp'] <= row['endTime'])
-
+        mask = (
+            (feature_pipeline.main_data['timestamp'] >= row['startTime']) &
+            (feature_pipeline.main_data['timestamp'] <= row['endTime'])
+        )
         df_main = feature_pipeline.main_data.loc[mask].copy()
 
         # Start with global dicts
@@ -79,37 +81,9 @@ def preprocess_sequences_csv_multilines(
             for k, v in feature_pipeline.global_dicts.items():
                 subseqs[k] = v.copy()
 
-            # Drop global invalid indices
-            if feature_pipeline.global_invalid:
-                for k in subseqs:
-                    subseqs[k] = subseqs[k].drop(index=feature_pipeline.global_invalid, errors="ignore")
-            # print("subseqs[k].head()",subseqs[k].head())
-            # Apply per-window steps
-            for step, per_win in zip(feature_pipeline.steps, feature_pipeline.per_window_flags):
-                # print("subseqs[main]",subseqs["main"].head())
-                if per_win:
-                    result = step(subseqs["main"])
-                    if len(result) == 2:
-                        df_sub, bad_idx = result
-                        subseqs["main"] = df_sub.drop(index=bad_idx)
-                        for k in subseqs:
-                            if k != "main":
-                                subseqs[k] = subseqs[k].drop(index=bad_idx, errors="ignore")
-                    elif len(result) == 3:
-                        df_sub, bad_idx, dicts_new = result
-                        subseqs["main"] = df_sub.drop(index=bad_idx)
-                        for k, v in dicts_new.items():
-                            subseqs[k] = v.drop(index=bad_idx, errors="ignore")
-                    else:
-                        raise ValueError("Step must return 2- or 3-tuple")
-
-            # Normalize all dicts
-            for dict_name, df_sub in subseqs.items():
-                norm_cfg = feature_pipeline.norm_methods.get(dict_name, {})
-                if norm_cfg:
-                    subseqs[dict_name] = feature_pipeline._normalize_single(
-                        df_sub, norm_cfg, fit=False, dict_name=dict_name
-                    )
+            # Apply per-window steps + normalization via FeaturePipeline
+            subseqs = feature_pipeline.apply_window(subseqs)
+            subseqs = feature_pipeline._normalize(subseqs, fit=False)
 
         # --- Collect features for all dicts ---
         X_dict = {}
@@ -118,8 +92,8 @@ def preprocess_sequences_csv_multilines(
             if dict_name == "main" and feature_cols is None:
                 feature_cols = feats
             arr = df_sub[feats].values.astype(np.float32)
-
             X_dict[dict_name] = arr
+
         if not X_dict or arr.shape[0] == 0:
             continue
 
@@ -152,9 +126,28 @@ def preprocess_sequences_csv_multilines(
             arr["main"].mean(axis=0) if arr["main"].shape[0] > 0 else np.zeros((feat_dim,), dtype=np.float32)
             for arr in X_dicts_list
         ])
+
+        # --- Debug print ---
+        if debug_sample is not False:
+            print("\n=== DEBUG SAMPLE CHECK (XGBoost mode) ===")
+            indices = [0] if debug_sample is True else (
+                [debug_sample] if isinstance(debug_sample, int) else list(debug_sample)
+            )
+            for idx in indices:
+                print(f"\n--- Sequence {idx} ---")
+                print("Label:", y_list[idx], "Encoded (padded):", y[idx])
+                print("Shape:", X_dicts_list[idx]["main"].shape)
+                print("First few rows of sequence:\n", X_dicts_list[idx]["main"][:5])
+                print("Flattened feature vector (X_flat):", X_flat[idx])
+            print("==========================\n")
+
         if val_split:
             idx_train, idx_val = train_test_split(np.arange(len(y)), test_size=test_size, random_state=random_state)
-            return (X_flat[idx_train], y[idx_train], X_flat[idx_val], y[idx_val], df_labels, feature_cols, max_len_y, label_lengths)
+            return (
+                X_flat[idx_train], y[idx_train],
+                X_flat[idx_val],   y[idx_val],
+                df_labels, feature_cols, max_len_y, label_lengths
+            )
         else:
             return X_flat, y, df_labels, feature_cols, max_len_y, label_lengths
 
@@ -167,12 +160,28 @@ def preprocess_sequences_csv_multilines(
         x_lengths
     )
 
+    # --- Debug print ---
+    if debug_sample is not False:
+        print("\n=== DEBUG SAMPLE CHECK (Torch mode) ===")
+        indices = [0] if debug_sample is True else (
+            [debug_sample] if isinstance(debug_sample, int) else list(debug_sample)
+        )
+        for idx in indices:
+            print(f"\n--- Sequence {idx} ---")
+            print("Label:", y_list[idx], "Encoded (padded):", y[idx])
+            for dict_name, arr in X_dicts_list[idx].items():
+                print(f"[{dict_name}] Shape:", arr.shape)
+                print(f"[{dict_name}] First few rows:\n", arr[:5])
+        print("==========================\n")
+
     if val_split:
         idx_train, idx_val = train_test_split(np.arange(len(y)), test_size=test_size, random_state=random_state)
         X_train = {k: [X_dicts_list[i][k] for i in idx_train] for k in X_dicts_list[0]}
-        X_val   = {k: [X_dicts_list[i][k] for i in idx_val] for k in X_dicts_list[0]}
-        return MultiInputDataset(X_train, y[idx_train], [x_lengths[i] for i in idx_train]), \
-               MultiInputDataset(X_val, y[idx_val], [x_lengths[i] for i in idx_val]), \
-               df_labels, feature_cols, max_len_y
+        X_val   = {k: [X_dicts_list[i][k] for i in idx_val]   for k in X_dicts_list[0]}
+        return (
+            MultiInputDataset(X_train, y[idx_train], [x_lengths[i] for i in idx_train]),
+            MultiInputDataset(X_val,   y[idx_val],   [x_lengths[i] for i in idx_val]),
+            df_labels, feature_cols, max_len_y
+        )
     else:
         return dataset, df_labels, feature_cols, max_len_y
