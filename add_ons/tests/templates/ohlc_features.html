@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>OHLC Chart</title>
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        /* Make chart fill most of the viewport */
+        #chart {
+            width: 1000px;   /* increased width */
+            height: 600px;   /* increased height */
+            margin-bottom: 20px;
+        }
+
+        /* Optional: make table scrollable if too many columns */
+        #features {
+            max-width: 1000px;
+            overflow-x: auto;
+            border-collapse: collapse;
+        }
+    </style>
+</head>
+<body>
+    <div id="chart"></div>
+    <h3>Candle Features:</h3>
+    <table id="features" border="1">
+        <thead><tr></tr></thead>
+        <tbody></tbody>
+    </table>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
