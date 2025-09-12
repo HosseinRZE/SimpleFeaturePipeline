@@ -20,9 +20,10 @@ class ServerPreprocess:
 
     def add_candle(self, new_candle: pd.Series | dict):
         """
-        Add one new candle (dict or Series) to internal dataset.
-        Applies only the global (non per-window) pipeline steps.
-        Also stores raw candle in reference_dataset.
+        Add one new candle to reference_dataset, update processed dataset.
+        - Applies only global steps to full reference_dataset via fit().
+        - Maintains self.dataset as dict of DataFrames: {"main": ..., **global_dicts}.
+        - Prints debug info to track pipeline transformations.
         """
         if isinstance(new_candle, dict):
             new_candle_df = pd.DataFrame([new_candle])
@@ -31,20 +32,16 @@ class ServerPreprocess:
         else:
             raise ValueError("new_candle must be dict or pd.Series")
 
-        # 👉 keep a copy of the raw OHLC before transforming
+        # Store raw candle
         self.add_reference_candle(new_candle_df)
 
-        # Apply only global steps
-        proc_candle = new_candle_df.copy()
-        for step, per_window in zip(self.feature_pipeline.steps, self.feature_pipeline.per_window_flags):
-            if not per_window:
-                proc_candle = step(proc_candle)
-                # 🔑 Handle case when step returns a tuple
-                if isinstance(proc_candle, tuple):
-                    proc_candle = proc_candle[0]
+        self.feature_pipeline.fit(self.reference_dataset)
 
-        # Append to processed dataset
-        self.dataset = pd.concat([self.dataset, proc_candle], ignore_index=True)
+        # Update processed dataset dict
+        self.dataset = {"main": self.feature_pipeline.main_data.copy()}
+        for k, v in self.feature_pipeline.global_dicts.items():
+            self.dataset[k] = v.copy()
+
 
 
     def add_reference_candle(self, new_candle: pd.DataFrame | dict | pd.Series):
@@ -64,21 +61,26 @@ class ServerPreprocess:
 
     def prepare_seq(self, seq_len: int):
         """
-        Get the last `seq_len` rows from dataset,
-        apply per-window steps and normalization (using training scalers).
+        Extract the last `seq_len` rows from all dict entries in self.dataset.
+        Applies per-window steps and normalization.
+        Returns dict of DataFrames.
         """
-        if len(self.dataset) < seq_len:
-            raise ValueError(f"Not enough data: have {len(self.dataset)}, need {seq_len}")
+        # --- Check lengths ---
+        lengths = {k: len(df) for k, df in self.dataset.items()}
+        if any(l < seq_len for l in lengths.values()):
+            raise ValueError(f"Not enough data: have {lengths}, need {seq_len}")
+        # --- Slice last seq_len rows ---
+        seq_slice = {k: v.iloc[-seq_len:].copy() for k, v in self.dataset.items()}
+        # --- Apply per-window steps ---
+        seq_dict = self.feature_pipeline.apply_window(seq_slice)  # should handle dict input
+        # --- Apply normalization ---
+        for k, df in seq_dict.items():
+            norm_cfg = self.feature_pipeline.norm_methods.get(k, {})
+            if norm_cfg:
+                seq_dict[k] = self.feature_pipeline._normalize_single(df, norm_cfg, fit=False, dict_name=k)
 
-        seq_df = self.dataset.iloc[-seq_len:].copy()
+        return seq_dict
 
-        # Apply per-window steps
-        seq_df = self.feature_pipeline.apply_window(seq_df)
-
-        # Apply normalization using pre-fitted scalers
-        seq_df = self.feature_pipeline._normalize(seq_df, fit=False)
-
-        return seq_df
 
     def prepare_xgboost_seq(self, seq_len: int, model=None) -> np.ndarray:
         """

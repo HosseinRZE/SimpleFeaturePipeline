@@ -1,0 +1,168 @@
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
+import joblib
+
+class FeaturePipeline:
+    def __init__(self, steps=None, per_window_flags=None, norm_methods=None):
+        self.steps = steps or []
+        self.per_window_flags = per_window_flags or [False] * len(self.steps)
+        self.norm_methods = norm_methods or {}
+        self.scalers = {}            # Store sklearn scalers for each column
+        self.global_dicts = {}       # Store dicts created by global steps
+        self.global_invalid = set()  # Store invalid indices from global steps
+        self.main_data = None        # Store main DataFrame after global processing
+
+    # -------------------
+    # Step application
+    # -------------------
+    def _apply_step(self, df, dicts, step):
+        """Apply a single step and handle optional output formats."""
+        result = step(df)
+        if isinstance(result, tuple):
+            if len(result) == 2:  # (df, bad_indices)
+                return result[0], result[1], dicts
+            elif len(result) == 3:  # (df, bad_indices, dicts_new)
+                dicts.update(result[2])
+                return result[0], result[1], dicts
+        return result, set(), dicts
+
+    # -------------------
+    # Global fit
+    # -------------------
+    def fit(self, df):
+        """Fit global steps and normalization."""
+        df_out = df.copy()
+        dicts = {}
+        all_invalid = set()
+
+        # --- Apply global steps ---
+        for step, per_win in zip(self.steps, self.per_window_flags):
+            if not per_win:
+                df_out, bad, dicts = self._apply_step(df_out, dicts, step)
+                all_invalid.update(bad)
+
+        # Drop invalid globally
+        if all_invalid:
+            df_out = df_out.drop(index=all_invalid, errors="ignore")
+            for k in dicts:
+                dicts[k] = dicts[k].drop(index=all_invalid, errors="ignore")
+
+        # Save global dicts & invalid indices
+        self.global_dicts = dicts
+        self.global_invalid = all_invalid
+        self.main_data = df_out.copy()  # Save processed main
+
+        # --- Fit normalization ---
+        data_all = {"main": df_out, **dicts}
+        self._normalize(data_all, fit=True)
+
+        return self
+
+    # -------------------
+    # Apply per-window
+    # -------------------
+    def apply_window(self, dicts):
+        """
+        Apply per-window steps and normalization for all dict entries.
+        dicts: dict of DataFrames
+        Returns dict of transformed DataFrames.
+        """
+        dicts_out = {k: v.copy() for k, v in dicts.items()}
+
+        # Drop global invalid indices
+        for k in dicts_out:
+            dicts_out[k] = dicts_out[k].drop(index=self.global_invalid, errors="ignore")
+
+        for step, per_win in zip(self.steps, self.per_window_flags):
+            if not per_win:
+                continue
+            # Apply step to 'main' only
+            result = step(dicts_out["main"])
+            if len(result) == 2:
+                df_sub, bad_idx = result
+                dicts_out["main"] = df_sub.drop(index=bad_idx)
+                for k in dicts_out:
+                    if k != "main":
+                        dicts_out[k] = dicts_out[k].drop(index=bad_idx, errors="ignore")
+            elif len(result) == 3:
+                df_sub, bad_idx, dicts_new = result
+                dicts_out["main"] = df_sub.drop(index=bad_idx)
+                for k, v in dicts_new.items():
+                    dicts_out[k] = v.drop(index=bad_idx, errors="ignore")
+            else:
+                raise ValueError("Step must return 2- or 3-tuple")
+
+        return dicts_out
+
+
+
+    # -------------------
+    # Normalization
+    # -------------------
+    def _normalize_single(self, df, norm_cfg, fit, dict_name):
+        df_out = df.copy()
+        for col, method in norm_cfg.items():
+            if col not in df_out.columns:
+                continue
+
+            col_data = df_out[col].values.reshape(-1, 1)
+            scaler_key = f"{dict_name}.{col}"
+
+            if method == "standard":
+                scaler = StandardScaler()
+            elif method == "minmax":
+                scaler = MinMaxScaler()
+            elif method == "robust":
+                scaler = RobustScaler()
+            elif method in (None, "none"):
+                continue
+            else:
+                raise ValueError(f"Unknown normalization method: {method}")
+
+            if fit:
+                col_data = scaler.fit_transform(col_data)
+                self.scalers[scaler_key] = scaler
+            else:
+                scaler = self.scalers.get(scaler_key)
+                if scaler is None:
+                    raise ValueError(f"No fitted scaler for {scaler_key}")
+                col_data = scaler.transform(col_data)
+
+            df_out[col] = col_data.flatten()
+        return df_out
+
+    def _normalize(self, data, fit=True):
+        """Normalize either a dict of DataFrames or a single DataFrame."""
+        if isinstance(data, dict):
+            for dict_name, df in data.items():
+                norm_cfg = self.norm_methods.get(dict_name, {})
+                data[dict_name] = self._normalize_single(df, norm_cfg, fit, dict_name)
+        else:
+            data = self._normalize_single(data, self.norm_methods.get("main", {}), fit, "main")
+        return data
+
+    # -------------------
+    # Extra utilities
+    # -------------------
+    def __iter__(self):
+        return iter(self.steps)
+
+    def export_config(self):
+        """Serialize pipeline steps + normalization + flags."""
+        steps_cfg = []
+        for step in self.steps:
+            steps_cfg.append({
+                "module": getattr(step, "_step_module", None),
+                "func": getattr(step, "_step_name", step.__name__),
+                "kwargs": getattr(step, "_step_kwargs", {})
+            })
+        return {
+            "steps": steps_cfg,
+            "norm_methods": self.norm_methods,
+            "per_window_flags": self.per_window_flags
+        }
+
+    def load(self, path):
+        """Load fitted scalers from disk."""
+        self.scalers = joblib.load(path)

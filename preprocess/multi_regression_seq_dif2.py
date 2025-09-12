@@ -45,10 +45,6 @@ def preprocess_sequences_csv_multilines(
     - If for_xgboost=True, returns (X_train, y_train, X_val, y_val, df_labels, feature_cols, max_len_y, label_lengths)
       where label_lengths is the list of true label lengths for the whole dataset.
     """
-    import pandas as pd
-    import numpy as np
-    from sklearn.model_selection import train_test_split
-
     df_data = pd.read_csv(data_csv)
     df_data['timestamp'] = pd.to_datetime(df_data['timestamp'])
     df_labels = pd.read_csv(labels_csv)
