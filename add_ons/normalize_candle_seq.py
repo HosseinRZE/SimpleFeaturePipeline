@@ -29,4 +29,4 @@ def add_label_normalized_candles(
     for c in ohlc_cols:
         df[f"{c}{suffix}"] = df[c].astype(np.float32) / last_close
 
-    return df
+    return df, []

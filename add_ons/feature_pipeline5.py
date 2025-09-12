@@ -34,24 +34,20 @@ class FeaturePipeline:
         """Fit global steps and normalization."""
         df_out = df.copy()
         dicts = {}
-        all_invalid = set()
+        global_bad = set()  # collect all global bad indices
 
         # --- Apply global steps ---
         for step, per_win in zip(self.steps, self.per_window_flags):
             if not per_win:
-                df_out, bad, dicts = self._apply_step(df_out, dicts, step)
-                all_invalid.update(bad)
+                df_out, bad, dicts_new = self._apply_step(df_out, dicts, step)
+                dicts.update(dicts_new)
+                global_bad.update(bad)
 
-        # Drop invalid globally
-        if all_invalid:
-            df_out = df_out.drop(index=all_invalid, errors="ignore")
-            for k in dicts:
-                dicts[k] = dicts[k].drop(index=all_invalid, errors="ignore")
-
-        # Save global dicts & invalid indices
+        # Save results
         self.global_dicts = dicts
-        self.global_invalid = all_invalid
-        self.main_data = df_out.copy()  # Save processed main
+        self.global_invalid = global_bad
+        self.global_bad_indices = global_bad  # <-- new attribute
+        self.main_data = df_out.copy()
 
         # --- Fit normalization ---
         data_all = {"main": df_out, **dicts}
@@ -64,38 +60,35 @@ class FeaturePipeline:
     # -------------------
     def apply_window(self, dicts):
         """
-        Apply per-window steps and normalization for all dict entries.
-        dicts: dict of DataFrames
-        Returns dict of transformed DataFrames.
+        Apply per-window steps and normalization.
+        Sequences containing any global_bad_indices are skipped (return None).
         """
-        dicts_out = {k: v.copy() for k, v in dicts.items()}
+        # If sequence contains any global bad indices, skip
+        if any(idx in self.global_bad_indices for idx in dicts["main"].index):
+            return None
 
-        # Drop global invalid indices
-        for k in dicts_out:
-            dicts_out[k] = dicts_out[k].drop(index=self.global_invalid, errors="ignore")
+        dicts_out = {k: v.copy() for k, v in dicts.items()}
 
         for step, per_win in zip(self.steps, self.per_window_flags):
             if not per_win:
                 continue
-            # Apply step to 'main' only
             result = step(dicts_out["main"])
             if len(result) == 2:
                 df_sub, bad_idx = result
-                dicts_out["main"] = df_sub.drop(index=bad_idx)
-                for k in dicts_out:
-                    if k != "main":
-                        dicts_out[k] = dicts_out[k].drop(index=bad_idx, errors="ignore")
+                if len(bad_idx) > 0:
+                    return None  # skip sequence if per-window step fails
+                dicts_out["main"] = df_sub
             elif len(result) == 3:
                 df_sub, bad_idx, dicts_new = result
-                dicts_out["main"] = df_sub.drop(index=bad_idx)
+                if len(bad_idx) > 0:
+                    return None
+                dicts_out["main"] = df_sub
                 for k, v in dicts_new.items():
-                    dicts_out[k] = v.drop(index=bad_idx, errors="ignore")
+                    dicts_out[k] = v
             else:
                 raise ValueError("Step must return 2- or 3-tuple")
 
         return dicts_out
-
-
 
     # -------------------
     # Normalization

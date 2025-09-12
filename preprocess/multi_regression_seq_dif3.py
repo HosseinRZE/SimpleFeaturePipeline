@@ -27,6 +27,7 @@ class MultiInputDataset(Dataset):
         # Convert the variable-length arrays to tensors on access
         sample = {k: torch.tensor(v[idx], dtype=torch.float32) for k, v in self.X_dict.items()}
         return sample, self.y[idx], self.x_lengths[idx]
+    
 def preprocess_sequences_csv_multilines(
     data_csv,
     labels_csv,
@@ -81,8 +82,12 @@ def preprocess_sequences_csv_multilines(
             for k, v in feature_pipeline.global_dicts.items():
                 subseqs[k] = v.copy()
 
-            # Apply per-window steps + normalization via FeaturePipeline
+            # Apply per-window steps 
             subseqs = feature_pipeline.apply_window(subseqs)
+            #if there is a bad index we should skip it
+            if subseqs == None:
+                continue
+            # we already save metrics on fit
             subseqs = feature_pipeline._normalize(subseqs, fit=False)
 
         # --- Collect features for all dicts ---
@@ -171,7 +176,7 @@ def preprocess_sequences_csv_multilines(
             print("Label:", y_list[idx], "Encoded (padded):", y[idx])
             for dict_name, arr in X_dicts_list[idx].items():
                 print(f"[{dict_name}] Shape:", arr.shape)
-                print(f"[{dict_name}] First few rows:\n", arr[:5])
+                print(f"[{dict_name}] First few rows:\n", arr[:])
         print("==========================\n")
 
     if val_split:
