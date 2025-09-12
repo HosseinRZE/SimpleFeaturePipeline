@@ -182,36 +182,46 @@
       currentKey = null;
     }
 
-    // --- Clear / log ---
-    function clearAll(logIt = true) {
-      if (logIt && startTime != null && endTime != null) {
-        const si = indexByTime.get(startTime);
-        const ei = indexByTime.get(endTime);
-        if (si != null && ei != null) {
-          const closeAtEnd = data[ei].close;
-          const lineObj = {};
-          priceLines.forEach(p => {
-            lineObj[KEY_MAP[p.key]] = (p.price / closeAtEnd).toFixed(6);
-          });
+// --- Clear / log ---
+function clearAll(logIt = true) {
+  if (logIt && startTime != null && endTime != null) {
+    let si = indexByTime.get(startTime);
+    let ei = indexByTime.get(endTime);
 
-          logs.push({
-            startIndex: Math.min(si, ei),
-            endIndex: Math.max(si, ei),
-            startTime,
-            endTime,
-            ...lineObj
-          });
-        }
-      }
-      priceLines.forEach(p => series.removePriceLine(p.obj));
-      priceLines = [];
-      startTime = null;
-      endTime = null;
-      usedKeys.clear();
-      currentKey = null;
-      renderVerticals();
-      setStage(STAGES.START);
+    // Ensure startTime < endTime
+    if (si > ei) {
+      [si, ei] = [ei, si];
+      [startTime, endTime] = [endTime, startTime];
     }
+
+    if (si != null && ei != null) {
+      const closeAtEnd = data[ei].close;
+      const lineObj = {};
+      priceLines.forEach(p => {
+        lineObj[KEY_MAP[p.key]] = (p.price / closeAtEnd).toFixed(6);
+      });
+
+      logs.push({
+        startIndex: si,
+        endIndex: ei,
+        startTime,
+        endTime,
+        ...lineObj
+      });
+    }
+  }
+
+  // Clear horizontal lines
+  priceLines.forEach(p => series.removePriceLine(p.obj));
+  priceLines = [];
+  startTime = null;
+  endTime = null;
+  usedKeys.clear();
+  currentKey = null;
+  renderVerticals();
+  setStage(STAGES.START);
+}
+
 
     // --- Interactions ---
     chart.subscribeClick(param => {
