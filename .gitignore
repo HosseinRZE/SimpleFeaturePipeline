@@ -5,7 +5,7 @@ __pycache__/
 .vscode/
 lightning_logs/
 .ipynb_checkpoints
-
+tune_logs/
 # Ignore everything inside models/ EXCEPT what we whitelist
 models/**
 # Allow specific subfolders
