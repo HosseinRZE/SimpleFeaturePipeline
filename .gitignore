@@ -6,6 +6,8 @@ __pycache__/
 lightning_logs/
 .ipynb_checkpoints
 tune_logs/
+*.toml
+*.egg-info
 # Ignore everything inside models/ EXCEPT what we whitelist
 models/**
 # Allow specific subfolders
