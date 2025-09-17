@@ -37,7 +37,8 @@ def preprocess_sequences_csv_multilines(
     random_state=42,
     for_xgboost=False,
     debug_sample=False,
-    preserve_order=True
+    preserve_order=True,
+    scale_labels = True
 ):
     """
     Preprocess main data + optional extra dicts for multi-line regression.
@@ -61,6 +62,10 @@ def preprocess_sequences_csv_multilines(
     # --- Fit pipeline globally ---
     if feature_pipeline is not None:
         feature_pipeline.fit(df_data)
+
+    # --- Optionally fit target scalers ---
+    if scale_labels and feature_pipeline is not None:
+        feature_pipeline.fit_y(df_labels, lineprice_cols)
 
     # --- Collect sequences ---
     X_dicts_list = []
@@ -105,14 +110,21 @@ def preprocess_sequences_csv_multilines(
         X_dicts_list.append(X_dict)
         x_lengths.append(len(subseqs["main"]))
 
-        # Labels
+        # --- Labels ---
+        line_prices = row[lineprice_cols].fillna(0).values.astype(np.float32)
+
+        if scale_labels and feature_pipeline is not None:
+            # Use pipeline transform_y (masking handled internally)
+            row_df = pd.DataFrame([row[lineprice_cols].values], columns=lineprice_cols)
+            row_scaled = feature_pipeline.transform_y(row_df, lineprice_cols).iloc[0].values.astype(np.float32)
+            line_prices = row_scaled
+
         if preserve_order:
-            line_prices = row[lineprice_cols].fillna(0).values.astype(np.float32)
             y_list.append(line_prices)
             label_lengths.append((line_prices != 0).sum())
         else:
-            line_prices = row[lineprice_cols].dropna().values.astype(np.float32)
-            line_prices = np.sort(line_prices)
+            nonzero_vals = line_prices[line_prices != 0]
+            line_prices = np.sort(nonzero_vals)
             y_list.append(line_prices)
             label_lengths.append(line_prices.shape[0])
 

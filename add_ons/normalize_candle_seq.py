@@ -17,14 +17,14 @@ def add_label_normalized_candles(
     if df.empty:
         for c in ohlc_cols:
             df[f"{c}{suffix}"] = 0.0
-        return df
+        return df, []
 
     last_close = df["close"].iloc[-1]
     if not np.isfinite(last_close) or last_close == 0.0:
         # avoid NaNs or divide-by-zero
         for c in ohlc_cols:
             df[f"{c}{suffix}"] = 0.0
-        return df
+        return df, []
 
     for c in ohlc_cols:
         df[f"{c}{suffix}"] = df[c].astype(np.float32) / last_close

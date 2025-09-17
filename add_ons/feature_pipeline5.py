@@ -156,6 +156,49 @@ class FeaturePipeline:
             "per_window_flags": self.per_window_flags
         }
 
+    def fit_y(self, df_labels, lineprice_cols):
+        """
+        Fit target scalers on label columns, ignoring NaN and zero placeholders.
+        """
+        for col in lineprice_cols:
+            all_vals = df_labels[col].values.astype(np.float32).flatten()
+            mask = ~np.isnan(all_vals) & (all_vals != 0)
+            if mask.sum() > 0:
+                scaler = StandardScaler().fit(all_vals[mask].reshape(-1, 1))
+                self.target_scalers[col] = scaler
+        return self
+
+    def transform_y(self, df_labels, lineprice_cols):
+        """
+        Apply fitted target scalers to label columns.
+        Only masked values (non-NaN, non-zero) are transformed.
+        """
+        df_out = df_labels.copy()
+        for col in lineprice_cols:
+            if col not in self.target_scalers:
+                continue
+            scaler = self.target_scalers[col]
+            vals = df_out[col].values.astype(np.float32)
+            mask = ~np.isnan(vals) & (vals != 0)
+            if mask.sum() > 0:
+                vals[mask] = scaler.transform(vals[mask].reshape(-1, 1)).flatten()
+            df_out[col] = vals
+        return df_out
+
+    def export_target_config(self):
+        """
+        Export target scaler configuration as a dict
+        (to be embedded in metadata).
+        """
+        return {
+            name: {
+                "mean": scaler.mean_.tolist() if hasattr(scaler, "mean_") else None,
+                "scale": scaler.scale_.tolist() if hasattr(scaler, "scale_") else None,
+                "class": scaler.__class__.__name__
+            }
+            for name, scaler in self.target_scalers.items()
+    }
+
     def load(self, path):
         """Load fitted scalers from disk."""
         self.scalers = joblib.load(path)
