@@ -12,7 +12,7 @@ class FeaturePipeline:
         self.global_dicts = {}       # Store dicts created by global steps
         self.global_invalid = set()  # Store invalid indices from global steps
         self.main_data = None        # Store main DataFrame after global processing
-
+        self.target_scalers = {} 
     # -------------------
     # Step application
     # -------------------
@@ -31,10 +31,9 @@ class FeaturePipeline:
     # Global fit
     # -------------------
     def fit(self, df):
-        """Fit global steps and normalization."""
         df_out = df.copy()
         dicts = {}
-        global_bad = set()  # collect all global bad indices
+        global_bad = set()
 
         # --- Apply global steps ---
         for step, per_win in zip(self.steps, self.per_window_flags):
@@ -46,13 +45,15 @@ class FeaturePipeline:
         # Save results
         self.global_dicts = dicts
         self.global_invalid = global_bad
-        self.global_bad_indices = global_bad  # <-- new attribute
+        self.global_bad_indices = global_bad
         self.main_data = df_out.copy()
 
         # --- Fit normalization ---
         data_all = {"main": df_out, **dicts}
         self._normalize(data_all, fit=True)
 
+        # --- Return a single dict for downstream slicing ---
+        self.global_data = data_all  # <-- new attribute
         return self
 
     # -------------------
@@ -172,6 +173,7 @@ class FeaturePipeline:
         """
         Apply fitted target scalers to label columns.
         Only masked values (non-NaN, non-zero) are transformed.
+        Any remaining NaNs are replaced with 0 internally.
         """
         df_out = df_labels.copy()
         for col in lineprice_cols:
@@ -182,22 +184,12 @@ class FeaturePipeline:
             mask = ~np.isnan(vals) & (vals != 0)
             if mask.sum() > 0:
                 vals[mask] = scaler.transform(vals[mask].reshape(-1, 1)).flatten()
+            # Replace remaining NaNs with 0
+            vals = np.nan_to_num(vals, nan=0.0)
             df_out[col] = vals
         return df_out
 
-    def export_target_config(self):
-        """
-        Export target scaler configuration as a dict
-        (to be embedded in metadata).
-        """
-        return {
-            name: {
-                "mean": scaler.mean_.tolist() if hasattr(scaler, "mean_") else None,
-                "scale": scaler.scale_.tolist() if hasattr(scaler, "scale_") else None,
-                "class": scaler.__class__.__name__
-            }
-            for name, scaler in self.target_scalers.items()
-    }
+
 
     def load(self, path):
         """Load fitted scalers from disk."""

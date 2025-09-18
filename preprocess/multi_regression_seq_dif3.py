@@ -75,24 +75,26 @@ def preprocess_sequences_csv_multilines(
     feature_cols = None
 
     for _, row in df_labels.iterrows():
+        # --- Slice main per label ---
         mask = (
             (feature_pipeline.main_data['timestamp'] >= row['startTime']) &
             (feature_pipeline.main_data['timestamp'] <= row['endTime'])
         )
         df_main = feature_pipeline.main_data.loc[mask].copy()
 
-        # Start with global dicts
+        # --- Start with main and slice global dicts using the same mask ---
         subseqs = {"main": df_main.copy()}
         if feature_pipeline is not None:
             for k, v in feature_pipeline.global_dicts.items():
-                subseqs[k] = v.copy()
+                # slice extra dicts by the same time mask as main
+                subseqs[k] = v.loc[mask].copy()
 
-            # Apply per-window steps 
+            # Apply per-window steps (optional)
             subseqs = feature_pipeline.apply_window(subseqs)
-            #if there is a bad index we should skip it
-            if subseqs == None:
-                continue
-            # we already save metrics on fit
+            if subseqs is None:
+                continue  # skip bad indices
+
+            # Normalize (fit=False),
             subseqs = feature_pipeline._normalize(subseqs, fit=False)
 
         # --- Collect features for all dicts ---
@@ -104,6 +106,9 @@ def preprocess_sequences_csv_multilines(
             arr = df_sub[feats].values.astype(np.float32)
             X_dict[dict_name] = arr
 
+            # --- DEBUG print ---
+            # print(f"[DEBUG] {dict_name}: df_sub shape = {df_sub.shape}, arr shape = {arr.shape}")
+
         if not X_dict or arr.shape[0] == 0:
             continue
 
@@ -112,9 +117,7 @@ def preprocess_sequences_csv_multilines(
 
         # --- Labels ---
         line_prices = row[lineprice_cols].fillna(0).values.astype(np.float32)
-
         if scale_labels and feature_pipeline is not None:
-            # Use pipeline transform_y (masking handled internally)
             row_df = pd.DataFrame([row[lineprice_cols].values], columns=lineprice_cols)
             row_scaled = feature_pipeline.transform_y(row_df, lineprice_cols).iloc[0].values.astype(np.float32)
             line_prices = row_scaled
