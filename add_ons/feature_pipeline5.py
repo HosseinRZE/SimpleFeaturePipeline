@@ -4,7 +4,7 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 import joblib
 
 class FeaturePipeline:
-    def __init__(self, steps=None, per_window_flags=None, norm_methods=None):
+    def __init__(self, steps=None, per_window_flags=None, norm_methods=None, window_norms=None):
         self.steps = steps or []
         self.per_window_flags = per_window_flags or [False] * len(self.steps)
         self.norm_methods = norm_methods or {}
@@ -12,7 +12,25 @@ class FeaturePipeline:
         self.global_dicts = {}       # Store dicts created by global steps
         self.global_invalid = set()  # Store invalid indices from global steps
         self.main_data = None        # Store main DataFrame after global processing
-        self.target_scalers = {} 
+        self.target_scaler = {} 
+        self.window_scalers = {} 
+        self.window_norms = window_norms or {}
+
+    def _make_scaler(self, method):
+        if method == "standard":
+            return StandardScaler()
+        if method == "robust":
+            return RobustScaler()
+        if method == "minmax":
+            return MinMaxScaler()
+        raise ValueError(f"Unknown normalization method: {method}")
+    
+    def export_target_scalers(self):
+        return self.target_scaler
+
+    def load_target_scalers(self, scalers_dict):
+        self.target_scaler = scalers_dict
+        return self.target_scaler
     # -------------------
     # Step application
     # -------------------
@@ -30,7 +48,7 @@ class FeaturePipeline:
     # -------------------
     # Global fit
     # -------------------
-    def fit(self, df):
+    def fit(self, df, normalize = True):
         df_out = df.copy()
         dicts = {}
         global_bad = set()
@@ -50,7 +68,9 @@ class FeaturePipeline:
 
         # --- Fit normalization ---
         data_all = {"main": df_out, **dicts}
-        self._normalize(data_all, fit=True)
+        # we do not assign the output so tha only save scalars for later use
+        if normalize ==True:
+            self._normalize(data_all, fit=True)
 
         # --- Return a single dict for downstream slicing ---
         self.global_data = data_all  # <-- new attribute
@@ -90,6 +110,101 @@ class FeaturePipeline:
                 raise ValueError("Step must return 2- or 3-tuple")
 
         return dicts_out
+
+
+    def apply_window_normalization(self, X_dicts_list, feature_columns, fit=True):
+        """
+        Apply per-column window normalization across all collected windows.
+
+        - X_dicts_list: list of dicts, each dict_name -> numpy array (T_i, n_features) for that sample
+        - feature_columns: dict mapping dict_name -> list of column names (order must match arrays)
+        - fit: if True, fit scalers from the concatenated column values; if False, just transform using already-fitted scalers.
+        
+        Stores fitted scalers in self.window_scalers with keys (dict_name, col_name).
+        Returns the modified X_dicts_list (modifies in place).
+        """
+        if not self.window_norms:
+            return X_dicts_list
+
+        for dict_name, col_method_map in self.window_norms.items():
+            cols = feature_columns.get(dict_name)
+            if cols is None:
+                # no feature names captured for this dict -> skip
+                continue
+
+            # For each column configured to be window-normalized
+            for col_name, method in col_method_map.items():
+                # determine column index
+                try:
+                    # prefer resolving by name
+                    col_idx = cols.index(col_name)
+                except ValueError:
+                    # if user supplied an integer-like key, try to interpret it
+                    try:
+                        col_idx = int(col_name)
+                    except Exception:
+                        # skip if cannot resolve
+                        continue
+
+                # collect values across all samples for this column
+                pieces = []
+                for sample in X_dicts_list:
+                    arr = sample.get(dict_name)
+                    if arr is None:
+                        continue
+                    arr = np.asarray(arr, dtype=np.float32)
+                    if arr.size == 0:
+                        continue
+                    # handle 1D arrays (single feature) vs 2D
+                    if arr.ndim == 1:
+                        if col_idx != 0:
+                            continue
+                        pieces.append(arr.reshape(-1, 1))
+                    else:
+                        if col_idx >= arr.shape[1]:
+                            continue
+                        pieces.append(arr[:, col_idx].reshape(-1, 1))
+
+                if not pieces:
+                    # nothing to fit/transform for this column
+                    continue
+
+                all_vals = np.vstack(pieces)  # shape (total_timesteps_across_all_windows, 1)
+                key = (dict_name, col_name)
+
+                if fit:
+                    scaler = self._make_scaler(method)
+                    scaler.fit(all_vals)
+                    self.window_scalers[key] = scaler
+                else:
+                    scaler = self.window_scalers.get(key)
+                    if scaler is None:
+                        raise RuntimeError(
+                            f"No fitted window scaler found for {key}. Call with fit=True first (on training data)."
+                        )
+
+                # transform each sample in-place
+                for sample in X_dicts_list:
+                    arr = sample.get(dict_name)
+                    if arr is None:
+                        continue
+                    arr = np.asarray(arr, dtype=np.float32)
+                    if arr.size == 0:
+                        continue
+
+                    if arr.ndim == 1:
+                        if col_idx != 0:
+                            continue
+                        transformed = scaler.transform(arr.reshape(-1, 1)).reshape(-1)
+                        sample[dict_name] = transformed.astype(np.float32)
+                    else:
+                        if col_idx >= arr.shape[1]:
+                            continue
+                        col_vals = arr[:, col_idx].reshape(-1, 1)
+                        arr[:, col_idx] = scaler.transform(col_vals).reshape(-1)
+                        sample[dict_name] = arr.astype(np.float32)
+
+        return X_dicts_list
 
     # -------------------
     # Normalization
@@ -159,38 +274,29 @@ class FeaturePipeline:
 
     def fit_y(self, df_labels, lineprice_cols):
         """
-        Fit target scalers on label columns, ignoring NaN and zero placeholders.
+        Fit ONE target scaler across all linePrice columns, ignoring NaN and zeros.
         """
-        for col in lineprice_cols:
-            all_vals = df_labels[col].values.astype(np.float32).flatten()
-            mask = ~np.isnan(all_vals) & (all_vals != 0)
-            if mask.sum() > 0:
-                scaler = StandardScaler().fit(all_vals[mask].reshape(-1, 1))
-                self.target_scalers[col] = scaler
+        all_vals = df_labels[lineprice_cols].values.astype(np.float32).flatten()
+        mask = ~np.isnan(all_vals) & (all_vals != 0)
+        if mask.sum() > 0:
+            scaler = StandardScaler().fit(all_vals[mask].reshape(-1, 1))
+            self.target_scaler = scaler
+
         return self
 
     def transform_y(self, df_labels, lineprice_cols):
-        """
-        Apply fitted target scalers to label columns.
-        Only masked values (non-NaN, non-zero) are transformed.
-        Any remaining NaNs are replaced with 0 internally.
-        """
         df_out = df_labels.copy()
-        for col in lineprice_cols:
-            if col not in self.target_scalers:
-                continue
-            scaler = self.target_scalers[col]
-            vals = df_out[col].values.astype(np.float32)
-            mask = ~np.isnan(vals) & (vals != 0)
-            if mask.sum() > 0:
-                vals[mask] = scaler.transform(vals[mask].reshape(-1, 1)).flatten()
-            # Replace remaining NaNs with 0
-            vals = np.nan_to_num(vals, nan=0.0)
-            df_out[col] = vals
+        if hasattr(self, "target_scaler"):
+            for col in lineprice_cols:
+                vals = df_out[col].values.astype(np.float32)
+                mask = ~np.isnan(vals) & (vals != 0)
+                if mask.sum() > 0:
+                    vals[mask] = self.target_scaler.transform(vals[mask].reshape(-1, 1)).flatten()
+                vals = np.nan_to_num(vals, nan=0.0)
+                df_out[col] = vals
         return df_out
-
-
-
+    
     def load(self, path):
         """Load fitted scalers from disk."""
         self.scalers = joblib.load(path)
+

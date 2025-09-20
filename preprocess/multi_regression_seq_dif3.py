@@ -38,7 +38,8 @@ def preprocess_sequences_csv_multilines(
     for_xgboost=False,
     debug_sample=False,
     preserve_order=True,
-    scale_labels = True
+    scale_labels = True,
+    window_norm_fit = True
 ):
     """
     Preprocess main data + optional extra dicts for multi-line regression.
@@ -73,7 +74,7 @@ def preprocess_sequences_csv_multilines(
     x_lengths = []
     label_lengths = []
     feature_cols = None
-
+    feature_columns = {} 
     for _, row in df_labels.iterrows():
         # --- Slice main per label ---
         mask = (
@@ -96,13 +97,17 @@ def preprocess_sequences_csv_multilines(
 
             # Normalize (fit=False),
             subseqs = feature_pipeline._normalize(subseqs, fit=False)
-
         # --- Collect features for all dicts ---
         X_dict = {}
         for dict_name, df_sub in subseqs.items():
             feats = [c for c in df_sub.columns if c != "timestamp"]
+            # store feature names for later (first time or overwrite is fine if consistent)
+            if dict_name not in feature_columns:
+                feature_columns[dict_name] = feats.copy()
+
             if dict_name == "main" and feature_cols is None:
                 feature_cols = feats
+
             arr = df_sub[feats].values.astype(np.float32)
             X_dict[dict_name] = arr
 
@@ -130,6 +135,15 @@ def preprocess_sequences_csv_multilines(
             line_prices = np.sort(nonzero_vals)
             y_list.append(line_prices)
             label_lengths.append(line_prices.shape[0])
+
+
+    # --- APPLY WINDOW NORMALIZATION AFTER WE COLLECT ALL SEQUENCES ---
+    if feature_pipeline is not None and getattr(feature_pipeline, "window_norms", None):
+        # if window_norm_fit==True -> fit scalers now (training)
+        # if window_norm_fit==False -> only transform using previously fitted scalers (inference)
+        X_dicts_list = feature_pipeline.apply_window_normalization(
+            X_dicts_list, feature_columns, fit=window_norm_fit
+        )
 
     # --- Pad labels ---
     max_len_y = max((len(arr) for arr in y_list), default=0)
@@ -166,10 +180,10 @@ def preprocess_sequences_csv_multilines(
             return (
                 X_flat[idx_train], y[idx_train],
                 X_flat[idx_val],   y[idx_val],
-                df_labels, feature_cols, max_len_y, label_lengths
+                df_labels, feature_columns, max_len_y, label_lengths
             )
         else:
-            return X_flat, y, df_labels, feature_cols, max_len_y, label_lengths
+            return X_flat, y, df_labels, feature_columns, max_len_y, label_lengths
 
     # ===============================
     # Torch Dataset mode
@@ -201,7 +215,7 @@ def preprocess_sequences_csv_multilines(
         return (
             MultiInputDataset(X_train, y[idx_train], [x_lengths[i] for i in idx_train]),
             MultiInputDataset(X_val,   y[idx_val],   [x_lengths[i] for i in idx_val]),
-            df_labels, feature_cols, max_len_y
+            df_labels, feature_columns, max_len_y
         )
     else:
-        return dataset, df_labels, feature_cols, max_len_y
+        return dataset, df_labels, feature_columns, max_len_y

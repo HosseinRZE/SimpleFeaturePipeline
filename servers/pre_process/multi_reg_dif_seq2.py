@@ -3,6 +3,8 @@ import importlib
 from utils.make_step import make_step
 from add_ons.feature_pipeline5 import FeaturePipeline
 import numpy as np
+import logging
+logger = logging.getLogger(__name__)  
 class ServerPreprocess:
     def __init__(self, feature_pipeline, scalers_path=None):
         """
@@ -13,7 +15,7 @@ class ServerPreprocess:
         self.feature_pipeline = feature_pipeline
         self.dataset = pd.DataFrame()           # processed features
         self.reference_dataset = pd.DataFrame() # raw OHLC candles
-
+        self._first_prepare_seq = True 
         # Load pre-fitted scalers from training
         if scalers_path is not None:
             self.feature_pipeline.load(scalers_path)
@@ -23,7 +25,7 @@ class ServerPreprocess:
         Add one new candle to reference_dataset, update processed dataset.
         - Applies only global steps to full reference_dataset via fit().
         - Maintains self.dataset as dict of DataFrames: {"main": ..., **global_dicts}.
-        - Prints debug info to track pipeline transformations.
+        - Prints info info to track pipeline transformations.
         """
         if isinstance(new_candle, dict):
             new_candle_df = pd.DataFrame([new_candle])
@@ -34,15 +36,9 @@ class ServerPreprocess:
 
         # Store raw candle
         self.add_reference_candle(new_candle_df)
-
-        self.feature_pipeline.fit(self.reference_dataset)
-
+        self.feature_pipeline.fit(self.reference_dataset, normalize = False)
         # Update processed dataset dict
-        self.dataset = {"main": self.feature_pipeline.main_data.copy()}
-        for k, v in self.feature_pipeline.global_dicts.items():
-            self.dataset[k] = v.copy()
-
-
+        self.dataset = self.feature_pipeline.global_data      
 
     def add_reference_candle(self, new_candle: pd.DataFrame | dict | pd.Series):
         """
@@ -60,25 +56,84 @@ class ServerPreprocess:
         self.reference_dataset = pd.concat([self.reference_dataset, new_candle], ignore_index=True)
 
     def prepare_seq(self, seq_len: int):
-        """
-        Extract the last `seq_len` rows from all dict entries in self.dataset.
-        Applies per-window steps and normalization.
-        Returns dict of DataFrames.
-        """
         # --- Check lengths ---
         lengths = {k: len(df) for k, df in self.dataset.items()}
         if any(l < seq_len for l in lengths.values()):
             raise ValueError(f"Not enough data: have {lengths}, need {seq_len}")
+
         # --- Slice last seq_len rows ---
         seq_slice = {k: v.iloc[-seq_len:].copy() for k, v in self.dataset.items()}
+
+        # only print on the first call
+        if self._first_prepare_seq:
+            print(">>> Raw slice values (candle_color):")
+            for k, df in seq_slice.items():
+                if "color" in df.columns:
+                    print(f"{k}: {df['color'].values[:5]}")
+
         # --- Apply per-window steps ---
-        seq_dict = self.feature_pipeline.apply_window(seq_slice)  # should handle dict input
-        # --- Apply normalization ---
+        seq_dict = self.feature_pipeline.apply_window(seq_slice)
+
+        # --- Global normalization ---
         for k, df in seq_dict.items():
             norm_cfg = self.feature_pipeline.norm_methods.get(k, {})
-            if norm_cfg:
+            if norm_cfg and self._first_prepare_seq:
+                print(f">>> Global normalization for dict: {k}")
+                for col, method in norm_cfg.items():
+                    print(f"   column: {col}, method: {method}")
+
+                    scaler = None
+                    if getattr(self.feature_pipeline, "scalers", None):
+                        key = f"{k}.{col}"
+                        scaler = self.feature_pipeline.scalers.get(key, None)
+
+                    if scaler is not None:
+                        if hasattr(scaler, "mean_"):
+                            print(f"      -> StandardScaler | mean={scaler.mean_[0]:.6f}, var={scaler.var_[0]:.6f}")
+                        elif hasattr(scaler, "min_") and hasattr(scaler, "scale_"):
+                            print(f"      -> MinMaxScaler   | min={scaler.min_[0]:.6f}, scale={scaler.scale_[0]:.6f}")
+                        elif hasattr(scaler, "center_") and hasattr(scaler, "scale_"):
+                            print(f"      -> RobustScaler   | center={scaler.center_[0]:.6f}, scale={scaler.scale_[0]:.6f}")
+                        else:
+                            print(f"      -> {type(scaler).__name__} (no standard stats exposed)")
+
                 seq_dict[k] = self.feature_pipeline._normalize_single(df, norm_cfg, fit=False, dict_name=k)
 
+        # --- Window scalers ---
+        if getattr(self.feature_pipeline, "window_scalers", None):
+            for dict_name, df in seq_dict.items():
+                for (dname, col_name), scaler in self.feature_pipeline.window_scalers.items():
+                    if dname != dict_name or col_name not in df.columns:
+                        continue
+
+                    before = df[col_name].values[:5].copy()
+                    df[col_name] = scaler.transform(df[[col_name]].values)
+                    after = df[col_name].values[:5]
+
+                    if self._first_prepare_seq:
+                        print(f"{dict_name} {col_name} before WINDOW norm: {before}")
+                        print(f"{dict_name} {col_name} after  WINDOW norm: {after}")
+                        print("window start")
+
+                        if hasattr(scaler, "mean_"):
+                            print(f"   -> StandardScaler | mean={scaler.mean_[0]:.6f}, var={scaler.var_[0]:.6f}")
+                        elif hasattr(scaler, "min_") and hasattr(scaler, "scale_"):
+                            print(f"   -> MinMaxScaler   | min={scaler.min_[0]:.6f}, scale={scaler.scale_[0]:.6f}")
+                        elif hasattr(scaler, "center_") and hasattr(scaler, "scale_"):
+                            print(f"   -> RobustScaler   | center={scaler.center_[0]:.6f}, scale={scaler.scale_[0]:.6f}")
+                        else:
+                            print(f"   -> {type(scaler).__name__} (no standard stats exposed)")
+
+                        if dict_name in self.feature_pipeline.norm_methods:
+                            method = self.feature_pipeline.norm_methods[dict_name].get(col_name, None)
+                            if method:
+                                print(f"   -> Normalization method in pipeline: {method}")
+                        print("window end")
+
+                    seq_dict[dict_name] = df
+
+        # ✅ after first run, disable prints
+        self._first_prepare_seq = False
         return seq_dict
 
 

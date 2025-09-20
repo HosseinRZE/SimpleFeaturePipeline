@@ -25,7 +25,7 @@ def add_candle_rocp(df, **kwargs):
     ohlc_cols=kwargs.get("ohlc_cols", ("open", "high", "low", "close"))
     suffix=kwargs.get("suffix", "_dif")
     normalize=kwargs.get("normalize", True)
-    relative_to=kwargs.get("relative_to", "same")
+    relative_to=kwargs.get("relative_to", "close")
 
     if df.empty:
         for c in ohlc_cols:
