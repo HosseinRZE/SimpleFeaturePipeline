@@ -32,14 +32,16 @@ def preprocess_sequences_csv_multilines(
     data_csv,
     labels_csv,
     feature_pipeline=None,
-    val_split=False,
+    val_split=True,
     test_size=0.2,
     random_state=42,
     for_xgboost=False,
     debug_sample=False,
     preserve_order=True,
-    scale_labels = True,
-    window_norm_fit = True
+    scale_labels = False,
+    window_norm_fit = True,
+    num_kernels=100,
+    normalise=False,
 ):
     """
     Preprocess main data + optional extra dicts for multi-line regression.
@@ -155,11 +157,16 @@ def preprocess_sequences_csv_multilines(
     # XGBoost mode
     # ===============================
     if for_xgboost:
-        feat_dim = X_dicts_list[0]["main"].shape[1] if X_dicts_list else 0
-        X_flat = np.stack([
-            arr["main"].mean(axis=0) if arr["main"].shape[0] > 0 else np.zeros((feat_dim,), dtype=np.float32)
-            for arr in X_dicts_list
-        ])
+        from utils.padd_sequence_xgboost import pad_sequences_dicts
+        from sktime.transformations.panel.rocket import Rocket
+        # Pad sequences
+        X_main = pad_sequences_dicts(X_dicts_list, dict_name="main", strategy="forward_fill")
+        
+        X_main_rocket = np.transpose(X_main, (0, 2, 1))  
+        print("X_main shape:", X_main_rocket.shape)  # should be (n_samples, time_length, n_channels)
+        # --- Apply ROCKET ---
+        rocket = Rocket(num_kernels=num_kernels,normalise=normalise, n_jobs=-1, random_state=random_state)
+        X_rocket = rocket.fit_transform(X_main_rocket).values   # shape: (n_samples, n_rocket_features)
 
         # --- Debug print ---
         if debug_sample is not False:
@@ -171,19 +178,22 @@ def preprocess_sequences_csv_multilines(
                 print(f"\n--- Sequence {idx} ---")
                 print("Label:", y_list[idx], "Encoded (padded):", y[idx])
                 print("Shape:", X_dicts_list[idx]["main"].shape)
-                print("First few rows of sequence:\n", X_dicts_list[idx]["main"][:5])
-                print("Flattened feature vector (X_flat):", X_flat[idx])
-            print("==========================\n")
-
+                print("First few rows of sequence:\n", X_dicts_list[idx]["main"][:])
+                print("ROCKET feature vector (X_rocket):", X_rocket[idx])
+        # --- Return splits or full dataset ---
         if val_split:
             idx_train, idx_val = train_test_split(np.arange(len(y)), test_size=test_size, random_state=random_state)
+            X_train_split, X_val_split = X_rocket[idx_train], X_rocket[idx_val]
+            y_train_split, y_val_split = y[idx_train], y[idx_val]
+            label_lengths_arr = np.array(label_lengths)
+            train_length, test_length = label_lengths_arr[idx_train], label_lengths_arr[idx_val]
             return (
-                X_flat[idx_train], y[idx_train],
-                X_flat[idx_val],   y[idx_val],
-                df_labels, feature_columns, max_len_y, label_lengths
+                X_train_split, y_train_split,
+                X_val_split,   y_val_split,
+                df_labels, feature_columns, max_len_y, train_length, test_length
             )
         else:
-            return X_flat, y, df_labels, feature_columns, max_len_y, label_lengths
+            return X_rocket, y, df_labels, feature_columns, max_len_y, label_lengths
 
     # ===============================
     # Torch Dataset mode

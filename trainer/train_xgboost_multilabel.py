@@ -6,9 +6,17 @@ from sklearn.metrics import classification_report, multilabel_confusion_matrix, 
 import os
 import io
 import numpy as np
-from preprocess.multilabel_preprocess import preprocess_csv_multilabel
+from preprocess.multilabel_preprocess2 import preprocess_csv_multilabel
 from utils.json_to_csv import json_to_csv_in_memory
 from utils.multilabel_threshold_tuning import tune_thresholds
+from add_ons.feature_pipeline5 import FeaturePipeline
+from utils.make_step import make_step
+from add_ons.drop_columns2 import drop_columns
+from add_ons.candle_dif_rate_of_change_percentage2 import add_candle_rocp
+from add_ons.candle_proportion import add_candle_proportions
+from add_ons.candle_rate_of_change import add_candle_ratios
+from add_ons.candle_proportion_simple import add_candle_shape_features
+from add_ons.normalize_candle_seq import add_label_normalized_candles
 def evaluate_multilabel_model(model, X_val, y_val, mlb, thresholds=None):
     """
     Evaluate a multi-label XGBoost model and print metrics.
@@ -56,7 +64,7 @@ def train_model_xgb_multilabel(
     save_model=False,
     return_val_accuracy=True,
     label_weighting="none",  # "none", dict, or "scale_pos"
-    threshold_tuning = True,
+    threshold_tuning = False,
     **model_params
 ):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -66,22 +74,54 @@ def train_model_xgb_multilabel(
     csv_string = json_to_csv_in_memory(labels_json)
     labels_csv = io.StringIO(csv_string)
 
+    pipeline = FeaturePipeline(
+        steps=[
+            make_step(add_candle_shape_features),
+            # make_step(add_candle_rocp),
+            # make_step(add_label_normalized_candles),
+            make_step(drop_columns, cols_to_drop=["open","high","low","close","volume"]),
+        ],
+        # norm_methods={
+            # "main": {
+            #     "upper_shadow": "robust", "body": "standard", "lower_shadow": "standard",
+            #     "upper_body_ratio": "standard", "lower_body_ratio": "standard",
+            #     "upper_lower_body_ratio": "standard", "Candle_Color": "standard",
+                
+            # }
+        #         "candle_shape": {
+        #             "upper_shadow": "standard",
+        #             "lower_shadow": "standard",
+        #             "body": "standard",
+        #             "color": "standard",
+        #         }
+        # },
+        # window_norms={
+        # "main": {"open_prop": "standard", "high_prop": "standard","low_prop": "standard", "close_prop": "standard"},},
+
+        per_window_flags=[
+        False, 
+        False, 
+        # True
+                ]
+    )
     if do_validation:
-        X_train, X_val, y_train, y_val, mlb, df, feature_cols, label_weights = preprocess_csv_multilabel(
+        X_train,y_train, X_val, y_val, df, feature_cols,mlb, label_weights = preprocess_csv_multilabel(
             data_csv, labels_csv,
             n_candles=seq_len,
             val_split=True,
             for_xgboost=True,
-            debug_sample=[10, 15],
-            label_weighting=label_weighting
+            debug_sample=[0, 1],
+            label_weighting=label_weighting,
+            feature_pipeline=pipeline
         )
     else:
-        X_train, y_train, mlb, df, feature_cols, label_weights = preprocess_csv_multilabel(
+        X_train, y_train, df, feature_cols,mlb, label_weights = preprocess_csv_multilabel(
             data_csv, labels_csv,
             n_candles=seq_len,
             val_split=False,
             for_xgboost=True,
-            label_weighting=label_weighting
+            label_weighting=label_weighting,
+            feature_pipeline=pipeline
         )
         X_val, y_val = None, None
 
@@ -147,8 +187,8 @@ def train_model_xgb_multilabel(
 
 if __name__ == "__main__":
     train_model_xgb_multilabel(
-        data_csv="data/Bitcoin_BTCUSDT_kaggle_1D_candles_prop.csv",
-        labels_json="data/candle_labels.json",
+        data_csv="/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles.csv",
+        labels_json="/home/iatell/projects/meta-learning/data/candle_labels.json",
         do_validation=True,
         label_weighting="scale_pos"
     )

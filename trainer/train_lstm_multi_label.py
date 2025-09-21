@@ -8,11 +8,19 @@ import pandas as pd
 import io
 import os
 import numpy as np
-from preprocess.multilabel_preprocess import preprocess_csv_multilabel
+from preprocess.multilabel_preprocess2 import preprocess_csv_multilabel
 from models.LSTM.lstm_multi_label import LSTMMultiLabelClassifier
 from utils.print_batch import print_batch
 from utils.json_to_csv import json_to_csv_in_memory  # <-- new util
 from utils.multilabel_threshold_tuning import tune_thresholds_nn
+from add_ons.feature_pipeline5 import FeaturePipeline
+from add_ons.drop_columns2 import drop_columns
+from add_ons.candle_dif_rate_of_change_percentage2 import add_candle_rocp
+from add_ons.candle_proportion import add_candle_proportions
+from add_ons.candle_rate_of_change import add_candle_ratios
+from add_ons.candle_proportion_simple import add_candle_shape_features
+from add_ons.normalize_candle_seq import add_label_normalized_candles
+from utils.make_step import make_step
 
 def evaluate_model(model, val_loader, mlb, threshold=0.2, return_probs=False):
     model.eval()
@@ -66,6 +74,7 @@ def train_model(
     save_model=False,
     return_val_accuracy=True,
     test_mode=False,
+    tune_thresholds = False,
 ):
     """
     Train an LSTM classification model with labels coming from JSON (in-memory CSV).
@@ -82,23 +91,54 @@ def train_model(
     else:
         raise ValueError("labels_json must be provided")
 
+    pipeline = FeaturePipeline(
+        steps=[
+            make_step(add_candle_shape_features),
+            # make_step(add_candle_rocp),
+            # make_step(add_label_normalized_candles),
+            make_step(drop_columns, cols_to_drop=["open","high","low","close","volume"]),
+        ],
+        # norm_methods={
+            # "main": {
+            #     "upper_shadow": "robust", "body": "standard", "lower_shadow": "standard",
+            #     "upper_body_ratio": "standard", "lower_body_ratio": "standard",
+            #     "upper_lower_body_ratio": "standard", "Candle_Color": "standard",
+                
+            # }
+        #         "candle_shape": {
+        #             "upper_shadow": "standard",
+        #             "lower_shadow": "standard",
+        #             "body": "standard",
+        #             "color": "standard",
+        #         }
+        # },
+        # window_norms={
+        # "main": {"open_prop": "standard", "high_prop": "standard","low_prop": "standard", "close_prop": "standard"},},
+
+        per_window_flags=[
+        False, 
+        False, 
+        # True
+                ]
+    )
         # --- Get dataset(s) ---
     if do_validation:
-        train_ds, val_ds, label_encoder, df, feature_cols, label_weights = preprocess_csv_multilabel(
+        train_ds, val_ds, df, feature_cols, label_encoder, label_weights = preprocess_csv_multilabel(
             data_csv, labels_csv,
             n_candles=seq_len,
             val_split=True,
             debug_sample=True,
-            label_weighting="none"  # or "none", or {"i": 2}
+            feature_pipeline=pipeline,
+            label_weighting="none"
         )
     else:
-        full_dataset, label_encoder, df, feature_cols, label_weights = preprocess_csv_multilabel(
+        full_dataset, df, feature_cols, label_encoder, label_weights = preprocess_csv_multilabel(
             data_csv, labels_csv,
             n_candles=seq_len,
             val_split=False,
             debug_sample=True,
             label_weighting="none"
-        )   
+        )
 
     # --- Model config ---
     input_dim = train_ds[0][0].shape[1] if do_validation else full_dataset[0][0].shape[1]
@@ -156,36 +196,38 @@ def train_model(
 
     # --- Validation accuracy ---
     val_acc_exact, val_acc_micro = None, None
+
     if do_validation:
+        # --- Extract all validation labels once ---
+        y_true_val = np.vstack([y for _, y in val_loader.dataset])
+
         # --- Step 1: Evaluate with default threshold ---
         val_acc_exact_default, val_acc_micro_default, y_probs = evaluate_model(
             model, val_loader, label_encoder, threshold=0.5, return_probs=True
         )
 
-        # --- Step 2: Tune thresholds per label ---
-        optimal_thresholds = tune_thresholds_nn(
-            y_true=np.vstack([y for _, y in val_loader.dataset]),
-            y_probs=y_probs
-        )
-        print("\n📌 Optimal thresholds per label:", dict(zip(label_encoder.classes_, optimal_thresholds)))
-
-        # --- Step 3: Evaluate again with tuned thresholds ---
-        val_acc_exact_tuned, val_acc_micro_tuned, _ = evaluate_model(
-            model, val_loader, label_encoder, threshold=0.5, return_probs=True
-        )
-        # Apply per-label thresholds manually
-        y_pred_tuned = (y_probs >= np.array(optimal_thresholds)).astype(int)
-        val_acc_exact_tuned = np.all(y_pred_tuned == np.vstack([y for _, y in val_loader.dataset]), axis=1).mean()
-        val_acc_micro_tuned = (y_pred_tuned == np.vstack([y for _, y in val_loader.dataset])).mean()
-
         print(f"\n✅ Validation before tuning: Exact={val_acc_exact_default:.3f}, Micro={val_acc_micro_default:.3f}")
-        print(f"✅ Validation after tuning: Exact={val_acc_exact_tuned:.3f}, Micro={val_acc_micro_tuned:.3f}")
+
+        # --- Optional: tune thresholds per label ---
+        if tune_thresholds:  # NEW PARAMETER
+            optimal_thresholds = tune_thresholds_nn(y_true=y_true_val, y_probs=y_probs)
+            print("\n📌 Optimal thresholds per label:", dict(zip(label_encoder.classes_, optimal_thresholds)))
+
+            # --- Step 2: Apply per-label thresholds manually ---
+            y_pred_tuned = (y_probs >= np.array(optimal_thresholds)).astype(int)
+            val_acc_exact_tuned = np.all(y_pred_tuned == y_true_val, axis=1).mean()
+            val_acc_micro_tuned = (y_pred_tuned == y_true_val).mean()
+            print(f"✅ Validation after tuning: Exact={val_acc_exact_tuned:.3f}, Micro={val_acc_micro_tuned:.3f}")
+        else:
+            val_acc_exact_tuned, val_acc_micro_tuned = val_acc_exact_default, val_acc_micro_default
+
 
 
 if __name__ == "__main__":
     train_model(
-        data_csv="data/Bitcoin_BTCUSDT_kaggle_1D_candles_prop.csv",
-        labels_json="data/candle_labels.json",  # JSON labels, no CSV needed on disk
+        data_csv="/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles.csv",
+        labels_json="/home/iatell/projects/meta-learning/data/candle_labels.json",  # JSON labels, no CSV needed on disk
         do_validation=True,
-        label_weighting="scale_pos"
+        save_model=False,
+        # label_weighting="scale_pos"
     )
