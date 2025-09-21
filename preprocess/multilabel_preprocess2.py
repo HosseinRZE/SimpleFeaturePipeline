@@ -34,7 +34,8 @@ def preprocess_csv_multilabel(
     random_state=42,
     for_xgboost=False,
     debug_sample=False,
-    label_weighting="none"
+    label_weighting="none",
+    include_no_label=False  # NEW ARGUMENT
 ):
     # --- Load Data ---
     df_data = pd.read_csv(data_csv)
@@ -46,6 +47,7 @@ def preprocess_csv_multilabel(
 
     df_data["timestamp"] = pd.to_datetime(df_data["timestamp"], errors="coerce")
     df_labels["timestamp"] = pd.to_datetime(df_labels["timestamp"], unit="s", errors="coerce")
+    
     # Merge
     df = pd.merge(df_data, df_labels[["timestamp", "label"]], on="timestamp", how="left")
 
@@ -53,24 +55,27 @@ def preprocess_csv_multilabel(
     df["label"] = df["label"].apply(
         lambda x: eval(x) if isinstance(x, str) and (x.startswith("[") or "," in x) else [x]
     )
+
     # --- Apply feature pipeline ---
     if feature_pipeline is not None:
-        feature_pipeline.fit(df)   # optional: only if training
-        # subseqs = feature_pipeline.apply_window({"main": df})
-        # subseqs = feature_pipeline._normalize(subseqs, fit=False)
+        feature_pipeline.fit(df)
         df = feature_pipeline.global_data["main"]
+
     # --- Collect sequences ---
     feature_cols = [c for c in df.columns if c not in ("timestamp", "label")]
     X, y_raw = [], []
+
     for i in range(n_candles, len(df)):
         past_candles = df.iloc[i-n_candles+1:i+1][feature_cols].values
         lbl = df.iloc[i]["label"]
-        if lbl is not None and len(lbl) > 0 and any(pd.notna(x) for x in lbl):
-            X.append(past_candles.astype(np.float32))
-            y_raw.append(lbl)
 
-    print("Collected sequences:", len(X))
-    print("y_raw sample:", y_raw[:10])
+        if lbl is None or len(lbl) == 0 or not any(pd.notna(x) for x in lbl):
+            if include_no_label:
+                lbl = ["no_label"]  # assign special label
+            else:
+                continue  # discard sequence
+        X.append(past_candles.astype(np.float32))
+        y_raw.append(lbl)
 
     # --- Encode labels ---
     def check_labels(y_raw):
@@ -83,11 +88,13 @@ def preprocess_csv_multilabel(
 
     # --- Compute label weights ---
     label_weights = get_label_weights(y_encoded, mlb, label_weighting)
+
     # --- Torch/XGB mode ---
     X_arr = np.array(X, dtype=np.float32)
     # --- Debug print ---
     if debug_sample is not False:
         print("\n=== DEBUG SAMPLE CHECK ===")
+        print(f"Total sequences collected: {len(X_arr)}")
         indices = [0] if debug_sample is True else (
             [debug_sample] if isinstance(debug_sample, int) else list(debug_sample)
         )
@@ -99,6 +106,7 @@ def preprocess_csv_multilabel(
             print("Feature shape:", X_arr[idx].shape)
             print("First few timesteps:\n", X_arr[idx][:])  # show   candles
         print("==========================\n")
+
     if for_xgboost:
         X_flat = X_arr.reshape(X_arr.shape[0], -1)
         if val_split:

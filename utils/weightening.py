@@ -1,10 +1,29 @@
 import numpy as np
-# --- Compute label weights ---
+
 def get_label_weights(y_encoded, mlb, label_weighting=None):
+    """
+    Compute per-label weights for multi-label classification.
+
+    Parameters
+    ----------
+    y_encoded : np.ndarray
+        Binary-encoded labels (n_samples, n_labels)
+    mlb : MultiLabelBinarizer
+        Used to get class names if dict-based weighting
+    label_weighting : None, 'none', dict, 'scale_pos', or False
+        - None / 'none' / False: all weights = 1 (no weighting)
+        - dict: mapping {label_name: weight}
+        - 'scale_pos': inverse frequency weighting
+
+    Returns
+    -------
+    weights : np.ndarray
+        Array of shape (n_labels,) with weights for each label
+    """
     n_labels = y_encoded.shape[1]
     weights = np.ones(n_labels)
 
-    if label_weighting is None or label_weighting == "none":
+    if label_weighting in (None, "none", False):
         return weights
 
     if isinstance(label_weighting, dict):
@@ -19,4 +38,4 @@ def get_label_weights(y_encoded, mlb, label_weighting=None):
             weights[i] = n_neg / n_pos if n_pos > 0 else 1
         return weights
 
-    raise ValueError("label_weighting must be None, 'none', dict, or 'scale_pos'")
+    raise ValueError("label_weighting must be None, 'none', dict, 'scale_pos', or False")
