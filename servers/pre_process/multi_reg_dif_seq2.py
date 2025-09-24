@@ -5,6 +5,7 @@ from add_ons.feature_pipeline5 import FeaturePipeline
 import numpy as np
 import logging
 logger = logging.getLogger(__name__)  
+
 class ServerPreprocess:
     def __init__(self, feature_pipeline, scalers_path=None):
         """
@@ -64,76 +65,13 @@ class ServerPreprocess:
         # --- Slice last seq_len rows ---
         seq_slice = {k: v.iloc[-seq_len:].copy() for k, v in self.dataset.items()}
 
-        # only print on the first call
-        if self._first_prepare_seq:
-            print(">>> Raw slice values (candle_color):")
-            for k, df in seq_slice.items():
-                if "color" in df.columns:
-                    print(f"{k}: {df['color'].values[:5]}")
-
         # --- Apply per-window steps ---
         seq_dict = self.feature_pipeline.apply_window(seq_slice)
 
-        # --- Global normalization ---
-        for k, df in seq_dict.items():
-            norm_cfg = self.feature_pipeline.norm_methods.get(k, {})
-            if norm_cfg and self._first_prepare_seq:
-                print(f">>> Global normalization for dict: {k}")
-                for col, method in norm_cfg.items():
-                    print(f"   column: {col}, method: {method}")
+        # --- Apply scalers ---
+        seq_dict = self.perform_global_scaler(seq_dict)
+        seq_dict = self.perform_window_scaler(seq_dict)
 
-                    scaler = None
-                    if getattr(self.feature_pipeline, "scalers", None):
-                        key = f"{k}.{col}"
-                        scaler = self.feature_pipeline.scalers.get(key, None)
-
-                    if scaler is not None:
-                        if hasattr(scaler, "mean_"):
-                            print(f"      -> StandardScaler | mean={scaler.mean_[0]:.6f}, var={scaler.var_[0]:.6f}")
-                        elif hasattr(scaler, "min_") and hasattr(scaler, "scale_"):
-                            print(f"      -> MinMaxScaler   | min={scaler.min_[0]:.6f}, scale={scaler.scale_[0]:.6f}")
-                        elif hasattr(scaler, "center_") and hasattr(scaler, "scale_"):
-                            print(f"      -> RobustScaler   | center={scaler.center_[0]:.6f}, scale={scaler.scale_[0]:.6f}")
-                        else:
-                            print(f"      -> {type(scaler).__name__} (no standard stats exposed)")
-
-                seq_dict[k] = self.feature_pipeline._normalize_single(df, norm_cfg, fit=False, dict_name=k)
-
-        # --- Window scalers ---
-        if getattr(self.feature_pipeline, "window_scalers", None):
-            for dict_name, df in seq_dict.items():
-                for (dname, col_name), scaler in self.feature_pipeline.window_scalers.items():
-                    if dname != dict_name or col_name not in df.columns:
-                        continue
-
-                    before = df[col_name].values[:5].copy()
-                    df[col_name] = scaler.transform(df[[col_name]].values)
-                    after = df[col_name].values[:5]
-
-                    if self._first_prepare_seq:
-                        print(f"{dict_name} {col_name} before WINDOW norm: {before}")
-                        print(f"{dict_name} {col_name} after  WINDOW norm: {after}")
-                        print("window start")
-
-                        if hasattr(scaler, "mean_"):
-                            print(f"   -> StandardScaler | mean={scaler.mean_[0]:.6f}, var={scaler.var_[0]:.6f}")
-                        elif hasattr(scaler, "min_") and hasattr(scaler, "scale_"):
-                            print(f"   -> MinMaxScaler   | min={scaler.min_[0]:.6f}, scale={scaler.scale_[0]:.6f}")
-                        elif hasattr(scaler, "center_") and hasattr(scaler, "scale_"):
-                            print(f"   -> RobustScaler   | center={scaler.center_[0]:.6f}, scale={scaler.scale_[0]:.6f}")
-                        else:
-                            print(f"   -> {type(scaler).__name__} (no standard stats exposed)")
-
-                        if dict_name in self.feature_pipeline.norm_methods:
-                            method = self.feature_pipeline.norm_methods[dict_name].get(col_name, None)
-                            if method:
-                                print(f"   -> Normalization method in pipeline: {method}")
-                        print("window end")
-
-                    seq_dict[dict_name] = df
-
-        # ✅ after first run, disable prints
-        self._first_prepare_seq = False
         return seq_dict
 
 
@@ -142,34 +80,120 @@ class ServerPreprocess:
         Prepare a sequence for XGBoost prediction.
         - Takes last `seq_len` rows from dataset
         - Applies per-window steps and normalization
-        - Average-pools across time
+        - Applies the exact transformation pipeline (ROCKET, flatten, etc.)
         - Optionally filters to model's expected features
         - Returns flat NumPy vector (shape: [1, n_features])
         """
-        if len(self.dataset) < seq_len:
-            raise ValueError(f"Not enough data: have {len(self.dataset)}, need {seq_len}")
+        lengths = {k: len(df) for k, df in self.dataset.items()}
+        if any(l < seq_len for l in lengths.values()):
+            raise ValueError(f"Not enough data: have {lengths}, need {seq_len}")
 
-        seq_df = self.dataset.iloc[-seq_len:].copy()
+        # Slice last `seq_len` rows
+        seq_slice = {k: v.iloc[-seq_len:].copy() for k, v in self.dataset.items()}
 
         # Apply per-window steps
-        seq_df = self.feature_pipeline.apply_window(seq_df)
+        seq_dict = self.feature_pipeline.apply_window(seq_slice)
 
-        # Apply normalization using pre-fitted scalers
-        seq_df = self.feature_pipeline._normalize(seq_df, fit=False)
+        # Apply scalers
+        seq_dict = self.perform_global_scaler(seq_dict)
+        seq_dict = self.perform_window_scaler(seq_dict)
+
+        # Wrap into list since transformations expect multiple sequences
+        X_trans = self.feature_pipeline.apply_transformations([seq_dict])
 
         # --- If model is provided, align features ---
         if model is not None:
             if hasattr(model, "feature_names_in_"):  # sklearn API
                 expected = list(model.feature_names_in_)
-            else:  # fallback: just number of features
-                expected = seq_df.columns[: model.get_booster().num_features()]
-            seq_df = seq_df[expected]
+                X_trans = X_trans[expected]
+            else:
+                # fallback: clip to correct number of features
+                n_feats = model.get_booster().num_features()
+                X_trans = X_trans.iloc[:, :n_feats]
 
-        # Average pool across time (axis=0)
-        feat_vec = seq_df.mean(axis=0).to_numpy(dtype=np.float32)
+        return X_trans.to_numpy(dtype=np.float32).reshape(1, -1)
+    
+    def perform_global_scaler(self, seq_dict: dict) -> dict:
+        """
+        Apply global scalers to each dict in seq_dict (in-place).
+        Includes debug prints only on the first run.
+        """
+        printed = False
+        for k, df in seq_dict.items():
+            norm_cfg = self.feature_pipeline.norm_methods.get(k, {})
+            if norm_cfg:
+                if self._first_prepare_seq:
+                    printed = True
+                    print(f">>> Global normalization for dict: {k}")
+                    for col, method in norm_cfg.items():
+                        print(f"   column: {col}, method: {method}")
+                        scaler = None
+                        if getattr(self.feature_pipeline, "scalers", None):
+                            key = f"{k}.{col}"
+                            scaler = self.feature_pipeline.scalers.get(key, None)
+                        if scaler is not None:
+                            if hasattr(scaler, "mean_"):
+                                print(f"      -> StandardScaler | mean={scaler.mean_[0]:.6f}, var={scaler.var_[0]:.6f}")
+                            elif hasattr(scaler, "min_") and hasattr(scaler, "scale_"):
+                                print(f"      -> MinMaxScaler   | min={scaler.min_[0]:.6f}, scale={scaler.scale_[0]:.6f}")
+                            elif hasattr(scaler, "center_") and hasattr(scaler, "scale_"):
+                                print(f"      -> RobustScaler   | center={scaler.center_[0]:.6f}, scale={scaler.scale_[0]:.6f}")
+                            else:
+                                print(f"      -> {type(scaler).__name__} (no standard stats exposed)")
 
-        return feat_vec.reshape(1, -1)
+                seq_dict[k] = self.feature_pipeline._normalize_single(
+                    df, norm_cfg, fit=False, dict_name=k
+                )
 
+        if printed:
+            self._first_prepare_seq = False
+        return seq_dict
+
+    def perform_window_scaler(self, seq_dict: dict) -> dict:
+        """
+        Apply window-based scalers to each dict in seq_dict (in-place).
+        Includes debug prints only on the first run.
+        """
+        if not getattr(self.feature_pipeline, "window_scalers", None):
+            return seq_dict
+
+        printed = False
+        for dict_name, df in seq_dict.items():
+            for (dname, col_name), scaler in self.feature_pipeline.window_scalers.items():
+                if dname != dict_name or col_name not in df.columns:
+                    continue
+
+                before = df[col_name].values[:5].copy()
+                df[col_name] = scaler.transform(df[[col_name]].values)
+                after = df[col_name].values[:5]
+
+                if self._first_prepare_seq:
+                    printed = True
+                    print(f"{dict_name} {col_name} before WINDOW norm: {before}")
+                    print(f"{dict_name} {col_name} after  WINDOW norm: {after}")
+                    print("window start")
+
+                    if hasattr(scaler, "mean_"):
+                        print(f"   -> StandardScaler | mean={scaler.mean_[0]:.6f}, var={scaler.var_[0]:.6f}")
+                    elif hasattr(scaler, "min_") and hasattr(scaler, "scale_"):
+                        print(f"   -> MinMaxScaler   | min={scaler.min_[0]:.6f}, scale={scaler.scale_[0]:.6f}")
+                    elif hasattr(scaler, "center_") and hasattr(scaler, "scale_"):
+                        print(f"   -> RobustScaler   | center={scaler.center_[0]:.6f}, scale={scaler.scale_[0]:.6f}")
+                    else:
+                        print(f"   -> {type(scaler).__name__} (no standard stats exposed)")
+
+                    if dict_name in self.feature_pipeline.norm_methods:
+                        method = self.feature_pipeline.norm_methods[dict_name].get(col_name, None)
+                        if method:
+                            print(f"   -> Normalization method in pipeline: {method}")
+                    print("window end")
+
+                seq_dict[dict_name] = df
+
+        if printed:
+            self._first_prepare_seq = False
+        return seq_dict
+    
 def import_function(module_name, func_name):
     """
     Dynamically import a function from its module.

@@ -4,7 +4,7 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 import joblib
 
 class FeaturePipeline:
-    def __init__(self, steps=None, per_window_flags=None, norm_methods=None, window_norms=None):
+    def __init__(self, steps=None, per_window_flags=None, norm_methods=None, window_norms=None, transformations= None):
         self.steps = steps or []
         self.per_window_flags = per_window_flags or [False] * len(self.steps)
         self.norm_methods = norm_methods or {}
@@ -15,6 +15,7 @@ class FeaturePipeline:
         self.target_scaler = {} 
         self.window_scalers = {} 
         self.window_norms = window_norms or {}
+        self.transformations = transformations
 
     def _make_scaler(self, method):
         if method == "standard":
@@ -250,7 +251,33 @@ class FeaturePipeline:
         else:
             data = self._normalize_single(data, self.norm_methods.get("main", {}), fit, "main")
         return data
+    
+    def apply_transformations(self, X_dicts_list):
+        '''transformation for now just perform automatically on "main" '''
+        if self.transformations is None:
+            return None
 
+        # normalize into a dict
+        if isinstance(self.transformations, str):
+            config = {"mode": self.transformations}
+        elif isinstance(self.transformations, dict):
+            config = self.transformations.copy()
+        else:
+            raise ValueError(f"Unsupported transformations type: {self.transformations}")
+
+        mode = config.pop("mode")  # remove mode, rest are kwargs
+
+        if mode == "rocket":
+            from transformations.rocket import rocket_transform
+            return rocket_transform(X_dicts_list, **config)
+        elif mode == "flatten":
+            from transformations.flattening import flatten_transform
+            return flatten_transform(X_dicts_list, **config)
+        elif callable(mode):
+            # allow user to pass a custom function
+            return mode(X_dicts_list, **config)
+        else:
+            raise ValueError(f"Unknown transformation mode: {mode}")
     # -------------------
     # Extra utilities
     # -------------------

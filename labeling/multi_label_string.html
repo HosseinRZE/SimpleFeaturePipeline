@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>OHLC Labeling Tool — Window + Multi Labels</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+:root { --bg:#ffffff; --fg:#111; --muted:#777; --accent:#e53935; --label:#2979ff; --window-bg: rgba(41,121,255,0.06); }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+  background: var(--bg);
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+}
+#controls {
+  display:flex; gap:10px; align-items:center;
+  padding:10px 12px; border-bottom:1px solid #e5e7eb;
+  position: sticky; top:0; background: var(--bg); z-index:5;
+}
+#wrapper { position: relative; width: 100%; flex: 1 1 auto; }
+#chart { width: 100%; height: 100%; }
+#overlay { position: absolute; top:0; left:0; right:0; bottom:0; pointer-events: none; z-index:9999; }
+.vline { position:absolute; top:0; bottom:0; width:2px; background: var(--accent); opacity:0.95; transform:translateX(-50%); }
+.windowShade { position:absolute; top:0; bottom:0; pointer-events:none; background: var(--window-bg); }
+.label { position:absolute; font-size:20px; font-weight:bold; color:var(--label); text-align:center; transform:translateX(-50%); white-space:nowrap; }
+button { padding: 6px 12px; border:1px solid #e5e7eb; background:#f8fafc; border-radius:8px; cursor:pointer; }
+button:hover { background:#eef2ff; }
+input[type="file"] { font-size: 14px; }
+.badge { font-size: 12px; padding: 2px 6px; border-radius: 999px; border:1px solid #e5e7eb; }
+</style>
+</head>
+<body>
+<div id="controls">
+  <input type="file" id="csvFile" accept=".csv" />
+  <button id="saveLog">Save Log</button>
+  <button id="undoBtn">Undo</button>
+  <span class="badge" id="stageBadge">Stage: place start vertical line</span>
+</div>
+
+<div id="wrapper">
+  <div id="chart"></div>
+  <div id="overlay"></div>
+</div>
+
+<script>
+/* -------------------
+   Chart & state
+   ------------------- */
+const chartEl = document.getElementById('chart');
+const overlay = document.getElementById('overlay');
+const stageBadge = document.getElementById('stageBadge');
+
+const chart = LightweightCharts.createChart(chartEl, {
+  layout: { background: { type:'solid', color:'#fff' }, textColor:'#111' },
+  grid: { vertLines:{visible:false}, horzLines:{visible:false} },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  rightPriceScale:{ borderVisible:false },
+  timeScale:{ borderVisible:false }
+});
+const series = chart.addCandlestickSeries();
+
+let data = [];
+let indexByTime = new Map();
+
+// window markers
+let startTime = null;
+let endTime = null;
+let startIndex = null;
+let endIndex = null;
+
+// current labels for the active window
+let currentLabels = []; // array of {div,char}
+
+// finalized logs
+let logs = []; // {startIndex, endIndex, startTime, endTime, labels}
+
+// last action for undo semantics
+let lastAction = null;
+
+/* -------------------
+   CSV parsing helpers
+   ------------------- */
+function toSec(t){
+  // accept purely numeric timestamp or ISO-like date
+  if (/^\d+$/.test(t)) return +t;
+  const v = new Date(t).getTime();
+  return Number.isFinite(v) ? Math.floor(v/1000) : NaN;
+}
+function parseCSV(text){
+  const rows = text.replace(/\r/g,'').trim().split('\n');
+  return rows.slice(1).map(r=>{
+    const p = r.split(',');
+    const t = toSec((p[0]||'').trim());
+    return { time: t, open: +p[1], high: +p[2], low: +p[3], close: +p[4] };
+  }).filter(d=>Number.isFinite(d.time));
+}
+
+document.getElementById('csvFile').addEventListener('change', e=>{
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = evt => {
+    data = parseCSV(evt.target.result);
+    series.setData(data);
+    indexByTime = new Map(data.map((d,i)=>[d.time,i]));
+    // reset any existing state
+    clearActiveWindow(false);
+    logs = [];
+    stageBadge.textContent = 'Stage: place start vertical line';
+  };
+  reader.readAsText(file);
+});
+
+/* -------------------
+   Utilities
+   ------------------- */
+function getCanvasLeftOffset(){
+  const canvas = chartEl.querySelector('canvas');
+  if (!canvas) return 0;
+  return canvas.getBoundingClientRect().left - overlay.getBoundingClientRect().left;
+}
+function getIndexForTime(t){
+  if (indexByTime.has(t)) return indexByTime.get(t);
+  // fallback: nearest index
+  let nearest = null, minDiff = Infinity;
+  for (let i = 0; i < data.length; i++){
+    const diff = Math.abs((data[i].time||0) - t);
+    if (diff < minDiff){ minDiff = diff; nearest = i; }
+  }
+  return nearest;
+}
+
+/* -------------------
+   Rendering overlay
+   ------------------- */
+function renderOverlay(){
+  // wipe overlay
+  overlay.innerHTML = '';
+
+  const offset = getCanvasLeftOffset();
+
+  // draw start / end vlines
+  if (startTime != null){
+    const xStart = chart.timeScale().timeToCoordinate(startTime);
+    if (xStart != null && !isNaN(xStart)) {
+      const v = document.createElement('div');
+      v.className = 'vline';
+      v.dataset.which = 'start';
+      v.style.left = Math.round(xStart + offset) + 'px';
+      overlay.appendChild(v);
+    }
+  }
+
+  if (endTime != null){
+    const xEnd = chart.timeScale().timeToCoordinate(endTime);
+    if (xEnd != null && !isNaN(xEnd)) {
+      const v2 = document.createElement('div');
+      v2.className = 'vline';
+      v2.dataset.which = 'end';
+      v2.style.left = Math.round(xEnd + offset) + 'px';
+      overlay.appendChild(v2);
+    }
+  }
+
+  // draw window shade (between start and end)
+  if (startTime != null && endTime != null){
+    const x1 = chart.timeScale().timeToCoordinate(startTime);
+    const x2 = chart.timeScale().timeToCoordinate(endTime);
+    if (x1 != null && x2 != null && !isNaN(x1) && !isNaN(x2)){
+      const left = Math.round(Math.min(x1,x2) + offset);
+      const right = Math.round(Math.max(x1,x2) + offset);
+      const shade = document.createElement('div');
+      shade.className = 'windowShade';
+      shade.style.left = left + 'px';
+      shade.style.width = Math.max(1, right - left) + 'px';
+      overlay.appendChild(shade);
+
+      // center x for labels
+      const centerX = Math.round(((x1 + x2) / 2) + offset);
+
+      // place stacked labels
+      currentLabels.forEach((l, i) => {
+        l.div.style.left = centerX + 'px';
+        l.div.style.top = (5 + i * 26) + 'px';
+        overlay.appendChild(l.div);
+      });
+    }
+  }
+}
+
+/* -------------------
+   Window & label logic
+   ------------------- */
+function clearActiveWindow(logIt = true){
+  // finalize and add to logs if logIt and full window exists
+  if (logIt && startTime != null && endTime != null){
+    const joined = currentLabels.map(x => x.char).join(',');
+    logs.push({
+      startIndex: startIndex,
+      endIndex: endIndex,
+      startTime: startTime,
+      endTime: endTime,
+      labels: joined
+    });
+  }
+
+  // remove label divs (they may or may not be attached)
+  currentLabels.forEach(l => { if (l.div && l.div.parentNode) l.div.parentNode.removeChild(l.div); });
+  currentLabels = [];
+
+  // clear times / indices
+  startTime = null;
+  endTime = null;
+  startIndex = null;
+  endIndex = null;
+
+  stageBadge.textContent = 'Stage: place start vertical line';
+  renderOverlay();
+  lastAction = null;
+}
+
+function startWindowAt(time){
+  startTime = time;
+  startIndex = getIndexForTime(startTime);
+  endTime = null;
+  endIndex = null;
+  currentLabels = [];
+  stageBadge.textContent = 'Stage: place end vertical line';
+  lastAction = 'start';
+  renderOverlay();
+}
+
+function finishWindowAt(time){
+  // allow clicks in any order: pick min/max
+  let s = Math.min(startTime, time);
+  let e = Math.max(startTime, time);
+  startTime = s;
+  endTime = e;
+  startIndex = getIndexForTime(startTime);
+  endIndex = getIndexForTime(endTime);
+
+  // prevent duplicate window labeling
+  if (logs.some(l => l.startTime === startTime && l.endTime === endTime)){
+    alert('This window is already labeled!');
+    // drop the endTime to let user pick again
+    endTime = null;
+    endIndex = null;
+    stageBadge.textContent = 'Stage: place end vertical line';
+    renderOverlay();
+    return;
+  }
+
+  stageBadge.textContent = 'Stage: type labels (press keys), Space to finalize';
+  lastAction = 'end';
+  renderOverlay();
+}
+
+function addLabel(char){
+  if (startTime == null || endTime == null) return;
+  const div = document.createElement('div');
+  div.className = 'label';
+  div.textContent = char;
+  // will be positioned by renderOverlay
+  currentLabels.push({ div, char });
+  lastAction = 'label';
+  renderOverlay();
+}
+
+/* -------------------
+   Click handling (start/end)
+   ------------------- */
+chart.subscribeClick(param=>{
+  if (!param || param.time == null) return;
+  const clicked = param.time;
+
+  if (startTime == null){
+    // first click -> start
+    startWindowAt(clicked);
+    return;
+  }
+
+  if (startTime != null && endTime == null){
+    // second click -> end
+    finishWindowAt(clicked);
+    return;
+  }
+
+  // both start and end already set:
+  // start a new window by making this click the new start
+  clearActiveWindow(false);
+  startWindowAt(clicked);
+});
+
+/* -------------------
+   Keyboard handling
+   ------------------- */
+function isTypingInInput(e){ const el = e.target; if(!el) return false; const t=(el.tagName||'').toLowerCase(); return t==='input'||t==='textarea'||el.isContentEditable; }
+
+window.addEventListener('keydown', e=>{
+  // finalize on Space
+  if (e.code === 'Space' && !isTypingInInput(e)){
+    e.preventDefault();
+    if (startTime != null && endTime != null){
+      // finalize active window and save to logs
+      clearActiveWindow(true);
+    }
+    return;
+  }
+
+  // alphanumeric keys create labels (only when full window exists)
+  if (startTime != null && endTime != null && e.key.length === 1 && /^[a-zA-Z0-9]$/.test(e.key)){
+    addLabel(e.key);
+  }
+});
+
+/* -------------------
+   Undo button
+   ------------------- */
+document.getElementById('undoBtn').addEventListener('click', ()=>{
+  // remove last label if any
+  if (currentLabels.length > 0){
+    const last = currentLabels.pop();
+    if (last.div.parentNode) last.div.parentNode.removeChild(last.div);
+    lastAction = 'undo-label';
+    renderOverlay();
+    return;
+  }
+
+  // if no labels, remove end line (if present)
+  if (endTime != null){
+    endTime = null;
+    endIndex = null;
+    currentLabels = [];
+    stageBadge.textContent = 'Stage: place end vertical line';
+    lastAction = 'undo-end';
+    renderOverlay();
+    return;
+  }
+
+  // if no end, remove start line
+  if (startTime != null){
+    startTime = null;
+    startIndex = null;
+    stageBadge.textContent = 'Stage: place start vertical line';
+    lastAction = 'undo-start';
+    renderOverlay();
+    return;
+  }
+});
+
+/* -------------------
+   Save to CSV
+   ------------------- */
+document.getElementById('saveLog').addEventListener('click', ()=>{
+  const header = 'startIndex,endIndex,startTime,endTime,labels\n';
+  let csv = header;
+  logs.forEach(l=>{
+    const si = l.startIndex == null ? '' : l.startIndex;
+    const ei = l.endIndex == null ? '' : l.endIndex;
+    const st = l.startTime == null ? '' : l.startTime;
+    const et = l.endTime == null ? '' : l.endTime;
+    const labels = (l.labels || '').replace(/"/g, '""'); // escape quotes
+    csv += `${si},${ei},${st},${et},"${labels}"\n`;
+  });
+
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'ohlcv_labels.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
+/* -------------------
+   Render loop triggers
+   ------------------- */
+chart.timeScale().subscribeVisibleTimeRangeChange(renderOverlay);
+new ResizeObserver(renderOverlay).observe(chartEl);
+
+/* initial state */
+stageBadge.textContent = 'Stage: place start vertical line';
+renderOverlay();
+
+</script>
+</body>
+</html>
