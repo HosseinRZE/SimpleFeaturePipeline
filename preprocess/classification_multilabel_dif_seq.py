@@ -16,7 +16,7 @@ def preprocess_sequences_csv_multilabels(
     for_xgboost=False,
     debug_sample=False,
     window_norm_fit=True,
-    return_mlb=False,
+    return_mlb=True,
 ):
     """
     Preprocess sequences for multi-label classification.
@@ -40,7 +40,7 @@ def preprocess_sequences_csv_multilabels(
             return []
         return [p.strip() for p in str(x).split(",") if p.strip() != ""]
 
-    all_label_lists = df_labels['label'].apply(_parse_label_field).tolist()
+    all_label_lists = df_labels['labels'].apply(_parse_label_field).tolist()
     mlb = MultiLabelBinarizer()
     mlb.fit(all_label_lists if any(all_label_lists) else [[]])
     num_classes = len(mlb.classes_)
@@ -83,7 +83,7 @@ def preprocess_sequences_csv_multilabels(
         X_dicts_list.append(X_dict)
         x_lengths.append(len(subseqs["main"]))
 
-        labels = _parse_label_field(row.get('label', []))
+        labels = _parse_label_field(row.get('labels', []))
         y_bin = mlb.transform([labels])[0] if num_classes > 0 else np.zeros((num_classes,), dtype=np.float32)
         y_list.append(y_bin.astype(np.float32))
         label_counts.append(len(labels))

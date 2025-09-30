@@ -3,7 +3,9 @@ import pandas as pd
 pd.set_option('future.no_silent_downcasting', True)
 from sklearn.model_selection import train_test_split
 from utils.build_multi_input_dataset import build_multiinput_dataset
-    
+from utils.debug_samples import debug_print_samples
+
+
 def preprocess_sequences_csv_multilines(
     data_csv,
     labels_csv,
@@ -104,39 +106,61 @@ def preprocess_sequences_csv_multilines(
         )
 
     # --- Pad labels ---
-    max_len_y = max((len(arr) for arr in y_list), default=0)
+    max_len_y = max(label_lengths, default=0)
     y = np.zeros((len(y_list), max_len_y), dtype=np.float32)
     for i, arr in enumerate(y_list):
-        y[i, : len(arr)] = arr
+        nonzero = arr[arr != 0]  # keep only real labels
+        y[i, : len(nonzero)] = nonzero
 
     # ===============================
-    # Return in requested format
+    # XGBoost mode for Multi-regression
     # ===============================
     if for_xgboost:
-        from utils.padd_sequence_xgboost import pad_sequences_dicts
-        X_main = pad_sequences_dicts(X_dicts_list, dict_name="main", strategy="forward_fill")
+        if feature_pipeline is None or feature_pipeline.transformations is None:
+            raise ValueError("XGBoost mode requires feature_pipeline with transformations defined")
 
-        # --- Debug print ---
-        if debug_sample is not False:
-            print("\n=== DEBUG SAMPLE CHECK (XGBoost mode) ===")
-            indices = [0] if debug_sample is True else (
-                [debug_sample] if isinstance(debug_sample, int) else list(debug_sample)
-            )
-            for idx in indices:
-                print(f"\n--- Sequence {idx} ---")
-                print("Label:", y_list[idx], "Encoded (padded):", y[idx])
-                print("Shape:", X_dicts_list[idx]["main"].shape)
-                print("First few rows of sequence:\n", X_dicts_list[idx]["main"][:])
+        # Apply feature transformations
+        X_trans = feature_pipeline.apply_transformations(X_dicts_list)
+
+        # Debug before splitting
+        if debug_sample:
+            indices = [debug_sample] if isinstance(debug_sample, int) else list(debug_sample)
+            debug_print_samples(indices, X_trans=X_trans, y_arr=y)
 
         if val_split:
-            idx_train, idx_val = train_test_split(np.arange(len(y)), test_size=test_size, random_state=random_state)
-            return (
-                X_main[idx_train], y[idx_train],
-                X_main[idx_val],   y[idx_val],
-                df_labels, feature_columns, max_len_y
+            # Use train_test_split to divide into train and validation sets
+            (
+                X_train, X_val,
+                y_train, y_val,
+                idx_train, idx_val
+            ) = train_test_split(
+                X_trans, y, np.arange(len(y)),
+                test_size=test_size, random_state=random_state
             )
+
+            # also split lengths
+            train_lengths_x = [x_lengths[i] for i in idx_train]
+            val_lengths_x   = [x_lengths[i] for i in idx_val]
+            train_lengths_y = [label_lengths[i] for i in idx_train]
+            val_lengths_y   = [label_lengths[i] for i in idx_val]
+
+            out = (
+                X_train, y_train, X_val, y_val,
+                feature_columns, max_len_y,
+                (train_lengths_x, train_lengths_y),
+                (val_lengths_x, val_lengths_y),
+            )
+
         else:
-            return X_main, y, df_labels, feature_columns, max_len_y
+            # If no validation split, return the entire dataset
+            out = (
+                X_trans, y,
+                feature_columns, max_len_y,
+                (x_lengths, label_lengths),
+            )
+
+        return out
+
 
     # Torch Dataset mode
     dataset = build_multiinput_dataset(X_dicts_list, y, x_lengths)
