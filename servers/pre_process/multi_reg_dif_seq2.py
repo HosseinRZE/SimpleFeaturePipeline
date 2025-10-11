@@ -71,7 +71,7 @@ class ServerPreprocess:
         # --- Apply scalers ---
         seq_dict = self.perform_global_scaler(seq_dict)
         seq_dict = self.perform_window_scaler(seq_dict)
-
+        seq_dict = self.perform_universal_scaler(seq_dict)
         return seq_dict
 
 
@@ -97,7 +97,7 @@ class ServerPreprocess:
         # Apply scalers
         seq_dict = self.perform_global_scaler(seq_dict)
         seq_dict = self.perform_window_scaler(seq_dict)
-
+        seq_dict = self.perform_universal_scaler(seq_dict)
         # Wrap into list since transformations expect multiple sequences
         X_trans = self.feature_pipeline.apply_transformations([seq_dict])
 
@@ -147,6 +147,35 @@ class ServerPreprocess:
 
         if printed:
             self._first_prepare_seq = False
+        return seq_dict
+    
+    def perform_universal_scaler(self, seq_dict: dict) -> dict:
+        """
+        Apply universal afterburner scaler (if available in the feature pipeline).
+        This ensures input data is normalized with the same scaler used during training.
+        """
+        if not hasattr(self.feature_pipeline, "afterburner_info"):
+            return seq_dict
+
+        scaler = self.feature_pipeline.afterburner_info.get("universal_scaler", None)
+        if scaler is None:
+            return seq_dict
+
+        try:
+            for k, df in seq_dict.items():
+                # Transform inplace and preserve structure
+                seq_dict[k] = pd.DataFrame(
+                    scaler.transform(df),
+                    columns=df.columns,
+                    index=df.index
+                )
+
+            if self._first_prepare_seq:
+                print("✅ Applied universal afterburner scaler to sequence.")
+
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to apply universal_scaler ({type(scaler).__name__}): {e}")
+
         return seq_dict
 
     def perform_window_scaler(self, seq_dict: dict) -> dict:
