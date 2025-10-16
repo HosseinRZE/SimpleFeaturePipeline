@@ -1,5 +1,10 @@
-# --- 3. Main Pipeline Orchestrator ---
+from typing import List, Dict, Any, Tuple
+import pandas as pd
+from utils.debug_samples2 import _debug_sample_check
+from utils.prepare_output import _prepare_output
+from add_ons.feature_pipeline_base import FeaturePipeline
 
+# --- 3. Main Pipeline Orchestrator ---
 def preprocess_pipeline(
     data_csv: str,
     labels_csv: str,
@@ -38,14 +43,14 @@ def preprocess_pipeline(
     for addon in feature_pipeline.add_ons:
         state = addon.before_sequence(state)
         
-    # --- Step 3: Sequencer Function ---
-    # Create lists of sequences based on label time windows.
-    X_list, y_list, x_lengths, y_lengths = _create_sequences(state)
+    # --- Step 3: Sequencer Method ---
+    # The FeaturePipeline's sequencer method now handles sequence generation and updates 'state' with lengths.
+    X_list, y_list = feature_pipeline.sequencer(state)
     state.update({
         'X_list': X_list,
         'y_list': y_list,
-        'x_lengths': x_lengths,
-        'y_lengths': y_lengths,
+        # x_lengths, y_lengths are expected to be updated within feature_pipeline.sequencer 
+        # as part of feature_pipeline.extra_params which is included in 'state'.
     })
 
     # --- Step 4: Apply Window ---
