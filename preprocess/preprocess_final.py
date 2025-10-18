@@ -3,7 +3,7 @@ import pandas as pd
 from utils.debug_samples2 import _debug_sample_check
 from utils.prepare_output import _prepare_output
 from add_ons.feature_pipeline_base import FeaturePipeline
-
+from utils.filter_sequences import filter_invalid_sequences
 # --- 3. Main Pipeline Orchestrator ---
 def preprocess_pipeline(
     data_csv: str,
@@ -57,7 +57,8 @@ def preprocess_pipeline(
     # Apply add-ons that process each sequence individually.
     for addon in feature_pipeline.add_ons:
         state = addon.apply_window(state)
-
+    # --- Step 4.5: Filter out sequences with invalid data ---
+    state = filter_invalid_sequences(state)
     # --- Step 5: Transformation ---
     # Apply add-ons that might change the shape/structure of the data.
     for addon in feature_pipeline.add_ons:

@@ -1,24 +1,30 @@
+import numpy as np
+from typing import List, Dict, Any
 from utils.multi_input_dataset import MultiInputDataset
 
-def build_multiinput_dataset(X_dicts_list, y_arr, x_lengths=None):
+def build_multiinput_dataset(X_list: List[Dict[str, Any]], y_padded: np.ndarray, x_lengths: List[int]):
     """
-    Convert a list of X_dicts and label array into a MultiInputDataset.
+    Transforms the list of feature dictionaries into a dictionary of feature lists 
+    and instantiates the MultiInputDataset.
 
-    Parameters
-    ----------
-    X_dicts_list : list of dict
-        Each element is a dict of arrays per input channel.
-    y_arr : np.ndarray
-        Label array of shape (n_samples, n_classes)
-    x_lengths : list or np.ndarray, optional
-        Sequence lengths for each sample (used for padding-aware models)
+    Args:
+        X_list: List of dictionaries, where each dict is a sample. 
+                e.g., [{'main': df1, 'aux': df_a1}, {'main': df2, 'aux': df_a2}, ...]
+        y_padded: Padded labels (NumPy array).
+        x_lengths: True lengths of the sequences.
 
-    Returns
-    -------
-    MultiInputDataset
+    Returns:
+        MultiInputDataset instance.
     """
-    if x_lengths is None:
-        x_lengths = [len(X_dicts_list[i]["main"]) for i in range(len(X_dicts_list))]
+    if not X_list:
+        return MultiInputDataset({}, y_padded, x_lengths)
 
-    X_dict = {k: [d[k] for d in X_dicts_list] for k in X_dicts_list[0]}
-    return MultiInputDataset(X_dict, y_arr, x_lengths)
+    # 1. Get the keys (e.g., 'main', 'aux') from the first sample
+    feature_keys = X_list[0].keys()
+    
+    # 2. Transpose the data: List[Dict] -> Dict[List]
+    X_dict = {key: [sample[key] for sample in X_list] for key in feature_keys}
+    
+    # The X_dict values are now List[DataFrame/Series]
+
+    return MultiInputDataset(X_dict, y_padded, x_lengths)
