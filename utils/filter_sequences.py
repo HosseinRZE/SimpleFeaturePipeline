@@ -1,62 +1,88 @@
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List
 import numpy as np
 import pandas as pd
+from add_ons.base_addon import BaseAddOn
+from data_structure.sequence_collection import SequenceCollection
+from data_structure.sequence_sample import SequenceSample
 
-def filter_invalid_sequences(state: Dict[str, Any]) -> Dict[str, Any]:
+
+class FilterInvalidSequencesAddOn(BaseAddOn):
     """
-    Filters sequences where the feature data in any of the nested DataFrames/Series 
-    within the 'X_list' dictionaries contains NaN values. Also filters the 
-    corresponding x_lengths and y_lengths.
+    Removes invalid samples from the SequenceCollection if any feature group contains NaN values.
 
-    Args:
-        state (Dict[str, Any]): The pipeline state dictionary which must contain
-                                'X_list', 'y_list', 'x_lengths', and 'y_lengths'.
+    ---
+    **Purpose**
+        Ensures data integrity by removing sequences that contain NaNs in any of 
+        their feature groups (e.g., 'main', 'aux'). This prevents runtime errors 
+        during model training and improves data quality consistency.
 
-    Returns:
-        Dict[str, Any]: The updated state dictionary with invalid sequences and 
-                        lengths removed.
+    ---
+    **Input**
+        state['samples']: SequenceCollection
+            Contains multiple SequenceSample objects.
+            Each SequenceSample has:
+                - X[group_key]: pandas.DataFrame (T x F)
+                - y: np.ndarray
+
+    ---
+    **Output**
+        state['samples']: SequenceCollection
+            A filtered version of the collection containing only valid samples.
+
+    ---
+    **Validation Criteria**
+        A sample is considered *invalid* if **any** of the following is true:
+        - Any DataFrame or Series in `sample.X[group_key]` contains NaN values.
+        - Any NumPy array in `sample.X[group_key]` contains NaN values.
+
+    ---
+    **Example**
+        Suppose:
+            sample_1.X["main"] = pd.DataFrame([[1, 2], [3, np.nan]])
+            sample_2.X["main"] = pd.DataFrame([[1, 2], [3, 4]])
+
+        Then only `sample_2` is kept.
+
+        Result:
+            state['samples'] = SequenceCollection([sample_2])
     """
-    
-    X_list: List[Dict[str, Any]] = state['X_list']
-    y_list: List[np.ndarray] = state['y_list']
-    x_lengths: List[int] = state['x_lengths']
-    y_lengths: List[int] = state['y_lengths']
-    
-    initial_count = len(X_list)
 
-    # 1. Define the check function for a single sample (which is a dict of DataFrames/Series/Arrays)
-    def is_valid_sample(x_sample: Dict[str, Any]) -> bool:
-        """Checks if any data component inside the sample dict contains NaN."""
-        # Iterate over all feature components (e.g., 'main', 'aux', etc.)
-        for component_data in x_sample.values():
-            if isinstance(component_data, (pd.DataFrame, pd.Series)):
-                # Pandas object check
-                if component_data.isnull().values.any():
-                    return False
-            elif isinstance(component_data, np.ndarray):
-                # NumPy array check (for potential future steps)
-                if np.isnan(component_data).any():
-                    return False
-        return True
+    def apply_window(
+        self, state: Dict[str, Any], pipeline_extra_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        samples: SequenceCollection = state.get("samples")
+        if not samples or len(samples) == 0:
+            print("⚠️ No samples found in state['samples']. Skipping FilterInvalidSequencesAddOn.")
+            return state
 
-    # 2. Identify the indices of valid sequences
-    valid_indices: List[int] = [
-        i for i, x in enumerate(X_list) if is_valid_sample(x)
-    ]
+        initial_count = len(samples)
 
-    # 3. Filter all lists in one go
-    state['X_list'] = [X_list[i] for i in valid_indices]
-    state['y_list'] = [y_list[i] for i in valid_indices]
-    state['x_lengths'] = [x_lengths[i] for i in valid_indices]
-    state['y_lengths'] = [y_lengths[i] for i in valid_indices]
+        # --- Compact, Pythonic NaN check ---
+        def is_valid_sample(sample: SequenceSample) -> bool:
+            """Returns True if all feature groups are NaN-free."""
+            return all(
+                not (
+                    (isinstance(data, (pd.DataFrame, pd.Series)) and data.isnull().values.any())
+                    or (isinstance(data, np.ndarray) and np.isnan(data).any())
+                )
+                for data in sample.X.values()
+            )
 
-    final_count = len(state['X_list'])
-    deleted_count = initial_count - final_count
+        # --- Filter samples with a single comprehension ---
+        valid_samples: List[SequenceSample] = [s for s in samples if is_valid_sample(s)]
 
-    # 4. Print deletion status
-    if deleted_count > 0:
-        print(f"⚠️ Filtered out {deleted_count} sequences due to NaN values (Removed {deleted_count/initial_count:.2%} of total). Remaining sequences: {final_count}")
-    else:
-        print("✅ No sequences were filtered out (no NaN values found).")
+        # --- Update state ---
+        state["samples"] = SequenceCollection(valid_samples)
 
-    return state
+        # --- Logging ---
+        final_count = len(valid_samples)
+        deleted_count = initial_count - final_count
+        if deleted_count > 0:
+            print(
+                f"⚠️ Filtered out {deleted_count} invalid sequences due to NaN values "
+                f"({deleted_count / initial_count:.2%} of total). Remaining: {final_count}"
+            )
+        else:
+            print("✅ No invalid sequences found (no NaN values detected).")
+
+        return state

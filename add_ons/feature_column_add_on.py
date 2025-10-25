@@ -1,7 +1,7 @@
 from typing import Dict, Any
 import pandas as pd
 from add_ons.base_addon import BaseAddOn 
-
+from utils.decorators.track import track
 class FeatureNamer(BaseAddOn):
     """
     An add-on to extract the names of all feature columns.
@@ -10,7 +10,7 @@ class FeatureNamer(BaseAddOn):
     feature groups (if data is in a dict) and stores a flat list of these
     names in state['feature_columns'].
     """
-
+    @track(input='state["X_list"]', output='state["feature_columns"]')
     def transformation(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Extracts feature names from the first sample in X_list."""
         X_list = state.get('X_list')

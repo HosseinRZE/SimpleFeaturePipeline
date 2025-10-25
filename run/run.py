@@ -11,12 +11,13 @@ from models.utils.early_stopping import get_early_stopping_callbacks
 from utils.run_debug_mode import run_debug_mode
 from utils.save_model_files import save_model_files
 from sequencer.sequencer import create_sequences_by_time
-from add_ons.feature_column_add_on import FeatureNamer
+from add_ons.feature_tracker_addon import FeatureColumnTrackerAddOn
 from add_ons.label_padder_add_on import LabelPadder
 from add_ons.input_dim_calculator import InputDimCalculator
-from add_ons.candle_normalization_addon import CandleNormalizationAddOn
+from add_ons.candle_norm_reduce_addon import CandleNormalizationAddOn
 from add_ons.candle_shape_add_on import CandleShapeFeaturesAddOn
-from add_ons.drop_column_windowing_add_on import DropColumnsWindowAddOn
+from add_ons.drop_column_windowing_add_on import DropColumnsAddOn
+from utils.filter_sequences import FilterInvalidSequencesAddOn
 
 # ---------------- Train ---------------- #
 def train_model(
@@ -41,17 +42,16 @@ def train_model(
     use_rescue = False,
     activation_functions = ["relu"]
 ):
+    
     # 2. Create the pipeline and add your modules
     feature_pipeline = FeaturePipeline(
         sequencer=create_sequences_by_time,
         add_ons=[
-            CandleNormalizationAddOn(),
-            DropColumnsWindowAddOn(cols_map={
-        # Target X_list: specify columns to drop for the 'main' group and the 'aux' group
-        "X_list": {
-            "main": ["open", "high", "low", "close", "volume"]},}),
+            CandleNormalizationAddOn(reduce=1),
+            DropColumnsAddOn(cols_map={ "main": ["open", "high", "low", "close", "volume"]}),
+            FilterInvalidSequencesAddOn(),
             LabelPadder(),
-            FeatureNamer(), 
+            FeatureColumnTrackerAddOn(), 
             InputDimCalculator()
         ]
     )
