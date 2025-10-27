@@ -1,7 +1,6 @@
 from typing import List, Dict, Any, Tuple
 import pandas as pd
 from utils.debug_samples2 import _debug_sample_check
-from utils.prepare_output import _prepare_output
 from add_ons.feature_pipeline_base import FeaturePipeline
 from utils.decorators.trace import trace
 # Import the custom data structures
@@ -72,7 +71,7 @@ def preprocess_pipeline(
     # --- Step 3: Sequence Generation ---
     # The sequencer must iterate over df_labels, create SequenceSample objects, 
     # wrap them in a SequenceCollection, and store it in state['samples'].
-    state = feature_pipeline.sequencer(state, feature_pipeline.extra_info)
+    state = feature_pipeline.run_sequence_on_train(state, feature_pipeline.extra_info)
     
     # --- Step 3.1: CONTRACT VALIDATION (MANDATORY CHECK) ---
     # Ensures the sequencer followed the required data contract.
@@ -104,4 +103,12 @@ def preprocess_pipeline(
     # --- Step 8: Output ---
     # _prepare_output must now extract the X, y, and index data from the SequenceCollection 
     # before splitting and packaging.
-    return _prepare_output(state, val_split, test_size, random_state, for_torch)
+    state = feature_pipeline.run_final_output(
+        state,
+        feature_pipeline.extra_info,
+        val_split=val_split,
+        test_size=test_size,
+        random_state=random_state,
+        for_torch=for_torch
+    )
+    return state["final_output"]

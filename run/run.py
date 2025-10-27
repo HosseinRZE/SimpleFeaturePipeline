@@ -10,7 +10,7 @@ from models.evaluation.multi_regression import evaluate_model
 from models.utils.early_stopping import get_early_stopping_callbacks
 from utils.run_debug_mode import run_debug_mode
 from utils.save_model_files import save_model_files
-from sequencer.sequencer import create_sequences_by_time
+from sequencer.sequencer import SequencerAddOn
 from add_ons.feature_tracker_addon import FeatureColumnTrackerAddOn
 from add_ons.label_padder_add_on import LabelPadder
 from add_ons.input_dim_calculator import InputDimCalculator
@@ -18,6 +18,7 @@ from add_ons.candle_norm_reduce_addon import CandleNormalizationAddOn
 from add_ons.candle_shape_add_on import CandleShapeFeaturesAddOn
 from add_ons.drop_column_windowing_add_on import DropColumnsAddOn
 from utils.filter_sequences import FilterInvalidSequencesAddOn
+from add_ons.prepare_output import PrepareOutputAddOn
 
 # ---------------- Train ---------------- #
 def train_model(
@@ -36,7 +37,7 @@ def train_model(
     optimizer_name= "adamw",
     scheduler_name = "reduce_on_plateau",
     optimizer_params={"weight_decay": 0.01},
-    scheduler_params={"factor": 0.2, "patience": 5} ,
+    scheduler_params={"factor": 0.2, "patience": 5},
     activation_function = "relu",
     use_mse_loss = False,
     use_rescue = False,
@@ -45,23 +46,23 @@ def train_model(
     
     # 2. Create the pipeline and add your modules
     feature_pipeline = FeaturePipeline(
-        sequencer=create_sequences_by_time,
         add_ons=[
+            SequencerAddOn(include_cols=None, exclude_cols=None),
             CandleNormalizationAddOn(reduce=1),
             DropColumnsAddOn(cols_map={ "main": ["open", "high", "low", "close", "volume"]}),
             FilterInvalidSequencesAddOn(),
             LabelPadder(),
             FeatureColumnTrackerAddOn(), 
-            InputDimCalculator()
-        ]
-    )
+            InputDimCalculator(),
+            PrepareOutputAddOn()
+        ])
+    
     model_save_path, meta_save_path, pipeline_save_path, folder_name = generate_filenames([
         ("model", "pt"),
         ("meta", "pkl"),
         ("pipeline", "pkl"),
         "fnn"
     ])
-
     # Preprocess: pad linePrices and sequences
     if do_validation:
         train_ds, val_ds, returned_state = preprocess_pipeline(
@@ -132,7 +133,6 @@ def train_model(
             pipeline_out=pipeline_save_path,
             pipeline=feature_pipeline,
             train_model=train_model,
-            **locals()
         )
 
     # --- Evaluation --- #
@@ -140,7 +140,6 @@ def train_model(
         metrics = evaluate_model(model, val_loader,feature_pipeline)
         if return_val_accuracy:
             return {"accuracy": metrics["mse"] * (-1)}
-
         
 if __name__ == "__main__":
     train_model(
@@ -148,7 +147,7 @@ if __name__ == "__main__":
         "/home/iatell/projects/meta-learning/data/baseline_regression.csv",
         do_validation=True,
         test_mode = True,
-        max_epochs=200,
+        max_epochs=100,
         hidden_dim=100,
         lr=0.01,
         batch_size=50,
@@ -156,7 +155,7 @@ if __name__ == "__main__":
         scheduler_name = "onecycle",
         optimizer_params={},
         scheduler_params={},
-        save_model= False,
+        save_model= True,
         use_mse_loss = False,
         use_rescue = False,
        activation_functions=["elu", "elu", "dropout(0.1)", "elu"] #"leaky_relu" "sigmoid" "tanh"  "elu" "relu" "swish" "mish"
