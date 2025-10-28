@@ -24,3 +24,4 @@ play_grounds/**
 play_grounds/models/saved_models/**
 !play_grounds/templates/**
 !play_grounds/*.ipynb
+experiments/**

@@ -8,7 +8,6 @@ from data_structure.sequence_sample import SequenceSample
 from data_structure.sequence_collection import SequenceCollection # CRITICAL NEW IMPORT
 
 @trace(time_track=True)
-       # --- 3. Main Pipeline Orchestrator ---
 def preprocess_pipeline(
     data_csv: str,
     labels_csv: str,

@@ -72,32 +72,30 @@ class PrepareOutputAddOn(BaseAddOn):
             )
             X_train, X_val = X[idx_train], X[idx_val]
             y_train, y_val = y_padded[idx_train], y_padded[idx_val]
-            print("here3")
             state["final_output"] = (X_train, y_train, X_val, y_val, state)
             return state
-
+        
+        else:
         # Torch / multi-input
-        if not val_split:
-            dataset = build_multiinput_dataset(X_list, y_padded, x_lengths_list)
-            state["final_output"] = (dataset, state)
-            print("here2")
-            return state
+            if not val_split:
+                dataset = build_multiinput_dataset(X_list, y_padded, x_lengths_list)
+                state["final_output"] = (dataset, state)
+                return state
+            else:
+                indices = np.arange(len(X_list))
+                idx_train, idx_val = train_test_split(indices, test_size=test_size, random_state=random_state)
 
-        indices = np.arange(len(X_list))
-        idx_train, idx_val = train_test_split(indices, test_size=test_size, random_state=random_state)
-
-        X_train = [X_list[i] for i in idx_train]
-        X_val = [X_list[i] for i in idx_val]
-        train_dataset = build_multiinput_dataset(
-            X_train, y_padded[idx_train], [x_lengths_list[i] for i in idx_train]
-        )
-        val_dataset = build_multiinput_dataset(
-            X_val, y_padded[idx_val], [x_lengths_list[i] for i in idx_val]
-        )
-        print("here1")
-        state["final_output"] = (train_dataset, val_dataset, state)
-        return state
-    
+                X_train = [X_list[i] for i in idx_train]
+                X_val = [X_list[i] for i in idx_val]
+                train_dataset = build_multiinput_dataset(
+                    X_train, y_padded[idx_train], [x_lengths_list[i] for i in idx_train]
+                )
+                val_dataset = build_multiinput_dataset(
+                    X_val, y_padded[idx_val], [x_lengths_list[i] for i in idx_val]
+                )
+                state["final_output"] = (train_dataset, val_dataset, state)
+                return state
+        
     def on_server_request(
         self,
         state: Dict[str, Any],
@@ -105,29 +103,19 @@ class PrepareOutputAddOn(BaseAddOn):
     ) -> Dict[str, Any]:
         """
         Prepares model-ready inputs for inference from processed state.
-
-        Expected model signature:
-            y_pred = model(samples, lengths)
-
-        Adds to state:
-            - state['samples']: List[Dict[str, Tensor]]
-            - state['lengths']: List[int]
         """
         samples: SequenceCollection = state.get("samples")
         if not isinstance(samples, SequenceCollection):
             raise TypeError("State must contain a 'samples' key with a SequenceCollection.")
 
-        # Build lists from sequence collection
+        # Extract features and lengths
         X_list = [s.X for s in samples]
         x_lengths_list = [s.x_lengths for s in samples]
 
-        # Convert DataFrames (or similar) into tensors
-        samples_torch = []
-        for X in X_list:
-            tensor_dict = {k: torch.tensor(v.to_numpy(), dtype=torch.float32) for k, v in X.items()}
-            samples_torch.append(tensor_dict)
+        # ✅ Create dummy y (just to satisfy dataset builder)
+        dummy_y = np.zeros(len(X_list), dtype=np.float32)
 
-        state["samples"] = samples_torch
-        state["lengths"] = x_lengths_list
+        # ✅ Reuse your existing helper to build a consistent dataset
+        dataset = build_multiinput_dataset(X_list, dummy_y, x_lengths_list)
 
-        return state
+        return dataset

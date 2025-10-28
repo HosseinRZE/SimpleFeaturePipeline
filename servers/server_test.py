@@ -8,7 +8,9 @@ import numpy as np
 import pandas as pd
 from flask import Flask, request, jsonify, render_template
 from typing import Dict, List, Any
-
+from utils.decorators.trace import trace
+from torch.utils.data import DataLoader
+from utils.padding_batch_reg import collate_batch
 # Import necessary classes
 # Note: LSTMKernelAttentionLSTMMultiRegressor needs to be importable
 from models.neural_nets.vanilla_fnn import VanillaFNN
@@ -22,9 +24,9 @@ from servers.pre_process.data_store_mock import DataStoreMock # Assuming DataSto
 app = Flask(__name__)
 
 # ---------------- Load model and meta ----------------
-meta_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251026_124213/meta_train_model_20251026_124213.pkl")
-state_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251026_124213/model_train_model_20251026_124213.pt")
-pipeline_path = "/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251026_124213/pipeline_train_model_20251026_124213.pkl"
+meta_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251027_160906/meta_train_model_20251027_160906.pkl")
+state_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251027_160906/model_train_model_20251027_160906.pt")
+pipeline_path = "/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251027_160906/pipeline_train_model_20251027_160906.pkl"
 
 # Pick the newest (last modified)
 meta_path = max(meta_files, key=os.path.getmtime)
@@ -113,7 +115,7 @@ def get_and_add_data():
         data_store_mock.add_candle(row) 
         
         return jsonify({"next_idx": next_idx + 1, "candle": candle})
-
+    
 @app.route("/predict", methods=['POST'])
 def predict():
     print("\n==== /predict called ====")
@@ -128,46 +130,53 @@ def predict():
         return jsonify({"error": "Provide 'seq_len' as an int"}), 400
 
     # 1. Run on_server_request hook
-    try:
-        print("➡️ Running on_server_request...")
-        state = {
-            "seq_len": seq_len,
-            "data_store": data_store_mock,
-            "df_data": data_store_mock.current_data
-        }
-        print(f"🟦 Current data_store length: {len(data_store_mock)}")
+    print("➡️ Running on_server_request...")
+    state = {
+        "seq_len": seq_len,
+        "data_store": data_store_mock,
+        "df_data": data_store_mock.current_data
+    }
+    print(f"🟦 Current data_store length: {len(data_store_mock)}")
+    
+    state = feature_pipeline.run_on_server_request(state, feature_pipeline.extra_info)
+        # 2. Create a DataLoader using the dataset AND your collate_fn
+    inference_loader = DataLoader(
+        dataset=state,
+        batch_size=1,  # Or any batch size your server handles
+        shuffle=False, # No need to shuffle for inference
+        collate_fn=collate_batch 
+    )
+    model.eval() # Set model to evaluation mode
+    predictions_list = []
 
-        state = feature_pipeline.run_on_server_request(state, feature_pipeline.extra_info)
-        print("✅ on_server_request completed.")
+    with torch.no_grad(): # Disable gradient computation
+        for batch in inference_loader:
+            # The collate_fn formats the data
+            X_batch, y_dummy_batch, lengths_batch = batch
 
-        samples = state.get("samples")
-        lengths = state.get("lengths")
-        print(f"🟩 dict_x keys: {list(samples.keys()) if samples else None}")
-        print(f"🟩 lengths: {lengths}")
+            # --- This is what your model expects ---
+            # X_batch is {'main': tensor(...), ...}
+            # y_dummy_batch is the stacked dummy_y (we ignore it)
+            # lengths_batch is {'main': tensor(...), ...}
+            # ----------------------------------------
 
-        if samples is None or lengths is None:
-            raise ValueError("on_server_request hook did not produce 'dict_x' or 'lengths' in the state.")
-             
-    except ValueError as e:
-        print(f"❌ ValueError in server_request: {e}")
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        print(f"❌ Exception in server_request: {type(e).__name__}: {e}")
-        import traceback; traceback.print_exc()
-        return jsonify({"error": f"Error during sequence preparation: {e}"}), 500
+            # (Optional) Move to GPU if your model is on GPU
+            # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            # X_batch = {k: v.to(device) for k, v in X_batch.items()}
+            # lengths_batch = {k: v.to(device) for k, v in lengths_batch.items()}
+            # model.to(device)
+            print("batch",batch)
+            print("X_batch", X_batch)
+            # 4. Call your model
+            predictions = model(X_batch, lengths_batch)
 
-    # 2. Predict
-    try:
-        print("➡️ Running model prediction...")
-        with torch.no_grad():
-            y_pred = model(samples, lengths)
-        print(f"✅ Model output shape: {tuple(y_pred.shape)}")
-    except Exception as e:
-        print(f"❌ Prediction error: {e}")
-        import traceback; traceback.print_exc()
-        return jsonify({"error": f"Prediction failed: {e}"}), 500
-
-    y_pred_np = y_pred.cpu().numpy()
+            predictions_list.append(predictions)
+# Check if the list is empty before concatenation (good practice)
+    if not predictions_list:
+        print("❌ Inference loop produced an empty prediction list.")
+        return jsonify({"error": "No data received for prediction"}), 500
+        
+    y_pred_np = torch.cat(predictions_list, dim=0).cpu().numpy()
     last_close = float(data_store_mock.current_data['close'].iloc[-1])
     # 3. Run on_server_inference hook
     # try:
@@ -194,10 +203,8 @@ def predict():
     #     return jsonify({"error": f"Inference processing failed: {e}"}), 500
     scaled_pred_prices = y_pred_np * last_close
     # 4. Return results
-    print("✅ Returning predictions.")
     return jsonify({
-        "pred_prices": scaled_pred_prices.tolist()
-    })
-
+            "pred_prices": scaled_pred_prices[0].tolist()
+        })
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)

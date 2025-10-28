@@ -56,13 +56,13 @@ def train_model(
             InputDimCalculator(),
             PrepareOutputAddOn()
         ])
-    
     model_save_path, meta_save_path, pipeline_save_path, folder_name = generate_filenames([
         ("model", "pt"),
         ("meta", "pkl"),
         ("pipeline", "pkl"),
         "fnn"
     ])
+    feature_pipeline.method_table()
     # Preprocess: pad linePrices and sequences
     if do_validation:
         train_ds, val_ds, returned_state = preprocess_pipeline(
@@ -137,7 +137,7 @@ def train_model(
 
     # --- Evaluation --- #
     if do_validation:
-        metrics = evaluate_model(model, val_loader,feature_pipeline)
+        metrics = evaluate_model(model, val_loader, feature_pipeline)
         if return_val_accuracy:
             return {"accuracy": metrics["mse"] * (-1)}
         

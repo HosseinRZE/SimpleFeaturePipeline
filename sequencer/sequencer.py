@@ -4,24 +4,20 @@ from data_structure.sequence_sample import SequenceSample
 from data_structure.sequence_collection import SequenceCollection
 import numpy as np
 import pandas as pd
-
-
 class SequencerAddOn(BaseAddOn):
     """
     Wraps the original create_sequences_by_time function as an add-on.
     Produces `state['samples']` from 'df_data' and 'df_labels'.
     """
-
-    on_evaluation_priority = 0  # runs before all feature add-ons
-
     def __init__(self, include_cols: List[str] = None, exclude_cols: List[str] = None):
         self.include_cols = include_cols
         self.exclude_cols = exclude_cols
+        self.sequence_on_server_priority = 1
 
     def sequence_on_train(self, state: Dict[str, Any], pipeline_extra_info: Dict[str, Any]):
         return self._run_sequencer(state, server_mode=False)
 
-    def sequence_on_server(self, state: Dict[str, Any], pipeline_extra_info: Dict[str, Any]):
+    def on_server_request(self, state: Dict[str, Any], pipeline_extra_info: Dict[str, Any]):
         return self._run_sequencer(state, server_mode=True)
 
     def _run_sequencer(self, state: Dict[str, Any], server_mode: bool = False) -> Dict[str, Any]:

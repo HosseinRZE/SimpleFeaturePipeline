@@ -1,5 +1,3 @@
-# utils/decorators/trace.py
-
 import logging
 import time
 from functools import wraps
@@ -11,7 +9,12 @@ logger = logging.getLogger(__name__)
 
 def _find_pipeline_instance(args: tuple, kwargs: dict) -> Any:
     """Helper to find the FeaturePipeline instance in function arguments."""
-    is_pipeline = lambda obj: hasattr(obj, 'add_ons') and hasattr(obj, 'sequencer_fn')
+    
+    # --- ✨ FIX: Changed check from 'sequencer_fn' to 'run_before_sequence' ---
+    # This check is now robust and matches your FeaturePipeline class definition.
+    is_pipeline = lambda obj: hasattr(obj, 'add_ons') and hasattr(obj, 'run_before_sequence')
+    # --- End Fix ---
+    
     for arg in args:
         if is_pipeline(arg):
             return arg
@@ -23,9 +26,7 @@ def _find_pipeline_instance(args: tuple, kwargs: dict) -> Any:
 def trace(time_track: bool = False, log_level: str = None):
     """
     Manages and displays a trace log of pipeline steps.
-
-    This decorator sets up the logging "context" that the @run decorator
-    will write to.
+    ...
     """
     def decorator(func: Callable):
         @wraps(func)
@@ -33,10 +34,11 @@ def trace(time_track: bool = False, log_level: str = None):
             pipeline_instance = _find_pipeline_instance(args, kwargs)
 
             if not pipeline_instance:
+                # This will now correctly execute if no pipeline is found
                 return func(*args, **kwargs)
 
             # 1. SETUP: Attach log and config to the pipeline instance
-            # The @run decorator will look for these attributes.
+            # ... (rest of the trace decorator is unchanged) ...
             pipeline_instance._trace_log = []
             pipeline_instance._trace_config = {
                 'time_track': time_track,
@@ -44,10 +46,10 @@ def trace(time_track: bool = False, log_level: str = None):
             }
 
             try:
-                # 2. EXECUTION: Run the decorated function (e.g., preprocess_pipeline)
+                # 2. EXECUTION
                 return func(*args, **kwargs)
             finally:
-                # 3. TEARDOWN: Format and display the results
+                # 3. TEARDOWN
                 log_data = pipeline_instance._trace_log
                 config = pipeline_instance._trace_config
                 header_text = f"--- Trace Log for: {func.__name__} ---"
@@ -79,7 +81,7 @@ def trace(time_track: bool = False, log_level: str = None):
 
                 print("="*len(header_text) + "\n")
 
-                # 4. CLEANUP: Remove temporary attributes
+                # 4. CLEANUP
                 delattr(pipeline_instance, '_trace_log')
                 delattr(pipeline_instance, '_trace_config')
         return wrapper
