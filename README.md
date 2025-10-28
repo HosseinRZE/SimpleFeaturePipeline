@@ -1,4 +1,3 @@
-Here's a comprehensive README.md file for your library, explaining its architecture, components, and usage.
 
 -----
 
