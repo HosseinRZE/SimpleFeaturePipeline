@@ -1,34 +1,41 @@
-from torch.nn.utils.rnn import pad_sequence
 import torch
+from torch.nn.utils.rnn import pad_sequence
+from typing import List, Dict, Any, Tuple
 
-def collate_batch(batch):
+# Make sure pad_sequence is imported
+# from torch.nn.utils.rnn import pad_sequence 
+
+def collate_batch(batch: List[Tuple[Dict[str, torch.Tensor], torch.Tensor, Dict[str, int], Dict[str, Any]]]):
     """
     Pads variable-length sequences in the batch and aggregates per-group lengths.
 
     Each item in the batch is expected to be a tuple:
-        (X_dict, y_tensor, x_lengths_dict)
-    where:
-        - X_dict: {'main': Tensor(T, F), 'aux': Tensor(T', F'), ...}
-        - y_tensor: Tensor(target_dim)
-        - x_lengths_dict: {'main': int, 'aux': int, ...}
+        (X_dict: {'main': Tensor(T, F), 'aux': Tensor(T', F'), ...},
+         y_tensor: Tensor(target_dim),
+         x_lengths_dict: {'main': int, 'aux': int, ...},
+         metadata_dict: {'last_close_price': float, ...}
+        )
     """
 
-    X_list, y_list, x_lengths_list = zip(*batch)  # unzip batch
+    # --- 1️⃣ Unzip all 4 components ---
+    # MODIFIED: Unpack metadata_list as well
+    X_list, y_list, x_lengths_list, metadata_list = zip(*batch) 
 
-    # --- 1️⃣ Pad per feature group ---
+    # --- 2️⃣ Pad per feature group ---
     X_dict_out = {}
     for group_key in X_list[0].keys():
         group_seqs = [x[group_key] for x in X_list]
         X_dict_out[group_key] = pad_sequence(group_seqs, batch_first=True)  # (B, T_max_group, F_group)
 
-    # --- 2️⃣ Stack targets ---
+    # --- 3️⃣ Stack targets ---
     y_tensor = torch.stack(y_list)
 
-    # --- 3️⃣ Convert per-group lengths to tensors ---
+    # --- 4️⃣ Convert per-group lengths to tensors ---
     lengths_dict_out = {}
     for group_key in x_lengths_list[0].keys():
         group_lengths = [torch.tensor(x[group_key], dtype=torch.long) for x in x_lengths_list]
         lengths_dict_out[group_key] = torch.stack(group_lengths)  # (B,)
 
-    # --- 4️⃣ Return batched structure ---
-    return X_dict_out, y_tensor, lengths_dict_out
+    # --- 5️⃣ Return batched structure ---
+    # MODIFIED: Return metadata_list (it's just a list of dicts, no padding needed)
+    return X_dict_out, y_tensor, lengths_dict_out, metadata_list

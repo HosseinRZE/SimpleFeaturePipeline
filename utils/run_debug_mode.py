@@ -27,7 +27,7 @@ def run_debug_mode(train_loader, feature_columns, test_mode=False):
     except StopIteration:
         batch = next(iter(train_loader))
 
-    X_batch_dict, y_batch, lengths = batch
+    X_batch_dict, y_batch, lengths, _ = batch
 
     print("🔍 Debug batch:")
     if isinstance(X_batch_dict, dict):

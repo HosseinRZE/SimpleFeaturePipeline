@@ -62,6 +62,7 @@ class SequencerAddOn(BaseAddOn):
             samples.append(sample)
 
         else:
+                        # Training mode: use original df_labels
             # Training mode: use original df_labels
             for original_index, row in df_labels.iterrows():
                 mask = (df_data["timestamp"] >= row["startTime"]) & (df_data["timestamp"] <= row["endTime"])
@@ -81,8 +82,21 @@ class SequencerAddOn(BaseAddOn):
                 X_dict = {"main": X_df}
                 y_labels = row[lineprice_cols].astype(np.float32).fillna(0).values
 
-                sample = SequenceSample(original_index=original_index, X_features=X_dict, y_labels=y_labels, metadata={})
-                samples.append(sample)
+                # --- ✅ Add last_close_price to metadata ---
+                last_close_price = None
+                if "close" in df_sequence.columns:
+                    last_close_price = float(df_sequence["close"].iloc[-1])
 
+                sample = SequenceSample(
+                    original_index=original_index,
+                    X_features=X_dict,
+                    y_labels=y_labels,
+                    metadata={
+                        "last_close_price": last_close_price,
+                        "startTime": row["startTime"],
+                        "endTime": row["endTime"]
+                    },
+                )
+                samples.append(sample)
         state["samples"] = SequenceCollection(samples)
         return state

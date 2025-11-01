@@ -5,7 +5,8 @@ from utils.multi_input_dataset import MultiInputDataset
 def build_multiinput_dataset(
     X_list: List[Dict[str, Any]],
     y_padded: np.ndarray,
-    x_lengths: List[Dict[str, int]]
+    x_lengths: List[Dict[str, int]],
+    metadata_list: List[Dict[str, Any]] = None
 ) -> MultiInputDataset:
     """
     Transforms the list of feature dictionaries into a dictionary of feature lists 
@@ -46,7 +47,7 @@ def build_multiinput_dataset(
           may require variable-length handling per feature group.
     """
     if not X_list:
-        return MultiInputDataset({}, y_padded, x_lengths)
+        return MultiInputDataset({}, y_padded, x_lengths, metadata_list)
 
     # 1. Extract feature group keys from the first sample
     feature_keys = X_list[0].keys()
@@ -55,4 +56,4 @@ def build_multiinput_dataset(
     X_dict = {key: [sample[key] for sample in X_list] for key in feature_keys}
 
     # 3. Return dataset instance
-    return MultiInputDataset(X_dict, y_padded, x_lengths)
+    return MultiInputDataset(X_dict, y_padded, x_lengths, metadata_list)
