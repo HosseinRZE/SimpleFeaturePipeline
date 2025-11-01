@@ -170,13 +170,13 @@ def predict():
         return jsonify({"error": "No data received for prediction"}), 500
         
     y_pred_np = torch.cat(predictions_list, dim=0).cpu().numpy()
+    last_close = float(data_store_mock.current_data['close'].iloc[-1])
     inference_payload = {
-        "y_pred_np": y_pred_np
+        "y_pred_np": y_pred_np,
+        "last_close_price": last_close
     }
     inference_payload = feature_pipeline.run_on_server_inference(inference_payload, feature_pipeline.extra_info)
-    y_pred_np_untransformed = inference_payload["y_pred_np"] 
-    last_close = float(data_store_mock.current_data['close'].iloc[-1])
-    scaled_pred_prices = y_pred_np_untransformed * last_close    # 4. Return results
+    scaled_pred_prices = inference_payload["y_pred_np"]   # 4. Return results
 
     return jsonify({
             "pred_prices": scaled_pred_prices[0].tolist()

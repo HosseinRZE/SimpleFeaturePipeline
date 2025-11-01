@@ -1,8 +1,8 @@
-from typing import Dict, Any, List, Union
+from typing import Dict, Any, List
 import numpy as np
 import pandas as pd
 # 1. IMPORT BaseAddOn AND the placeholder
-from add_ons.base_addon import BaseAddOn, ATTACHMENT_PLACEHOLDER 
+from add_ons.base_addon import BaseAddOn
 from data_structure.sequence_sample import SequenceSample
 from data_structure.sequence_collection import SequenceCollection
 

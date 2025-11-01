@@ -17,6 +17,7 @@ from add_ons.input_dim_calculator import InputDimCalculator
 from add_ons.candle_norm_reduce_addon import CandleNormalizationAddOn
 from add_ons.candle_shape_add_on import CandleShapeFeaturesAddOn
 from add_ons.drop_column_windowing_add_on import DropColumnsAddOn
+from add_ons.real_price_multiplier import RealPriceMultiplier
 from utils.filter_sequences import FilterInvalidSequencesAddOn
 from add_ons.prepare_output import PrepareOutputAddOn
 from add_ons.RootPower import RootPowerMapperAddOn
@@ -60,7 +61,8 @@ def train_model(
             LabelPadder(),
             FeatureColumnTrackerAddOn(), 
             InputDimCalculator(),
-            PrepareOutputAddOn()
+            PrepareOutputAddOn(metadata_keys=["last_close_price"]),
+            RealPriceMultiplier()
         ])
     model_save_path, meta_save_path, pipeline_save_path, folder_name = generate_filenames([
         ("model", "pt"),

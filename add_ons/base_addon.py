@@ -27,9 +27,6 @@ except ImportError:
 ATTACHMENT_PLACEHOLDER = "[view_details_link]"
 class BaseAddOn:
     
-    def __init__(self):
-        """Initializes a (non-persistent) state for the add-on."""
-        self._current_attachment: Any = None
 
     # ------------------- Data Processing Stages ------------------- #
     # (before_sequence, apply_window, transformation, etc. are unchanged)
