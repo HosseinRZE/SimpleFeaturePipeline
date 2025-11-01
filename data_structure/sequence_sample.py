@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Union
 import numpy as np
 import pandas as pd
 
@@ -13,7 +13,7 @@ class SequenceSample:
     """
     def __init__(self, 
                  original_index: int, 
-                 X_features: Dict[str, np.ndarray], 
+                 X_features: Dict[str, Union[np.ndarray, pd.DataFrame, pd.Series]], 
                  y_labels: np.ndarray, 
                  metadata: Dict[str, Any]):
         """

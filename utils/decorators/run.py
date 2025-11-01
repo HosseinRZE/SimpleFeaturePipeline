@@ -37,64 +37,39 @@ def run(hook_name: str, mode: str = "loop", track: bool = False, order: int = 99
                     pipeline_extra_info = args[0] 
                 except IndexError:
                     pipeline_extra_info = {}
-
+            
             # --- Main Execution Logic ---
             if mode in ("loop", "priority_loop"):
-                
                 add_on_list = self.add_ons
                 
-                # --- Implementation for Priority Loop ---
                 if mode == "priority_loop":
+                    # ... (priority_loop logic) ...
                     priority_attr_name = f"{hook_name}_priority"
-                    
                     prioritized_addons: List[Dict[str, Any]] = []
-                    
                     for add_on in add_on_list:
                         hook = getattr(add_on, hook_name, None)
                         base_method = getattr(BaseAddOn, hook_name, None)
-
                         if callable(hook) and hook.__func__ != base_method:
-                            
                             if not hasattr(add_on, priority_attr_name):
-                                raise ValueError(
-                                    f"❌ Add-on '{add_on.__class__.__name__}' implements "
-                                    f"the priority hook '{hook_name}', but is missing the "
-                                    f"required priority attribute '{priority_attr_name}'."
-                                )
-                            
+                                raise ValueError(f"❌ Add-on '{add_on.__class__.__name__}' missing priority attribute '{priority_attr_name}'.")
                             priority = getattr(add_on, priority_attr_name)
                             if not isinstance(priority, (int, float)):
-                                raise TypeError(
-                                    f"❌ Priority attribute '{priority_attr_name}' on add-on "
-                                    f"'{add_on.__class__.__name__}' must be a number (int or float), "
-                                    f"but got '{type(priority).__name__}'."
-                                )
-                                
-                            prioritized_addons.append({
-                                'add_on': add_on,
-                                'hook': hook,
-                                'priority': priority
-                            })
-                            
+                                raise TypeError(f"❌ Priority attribute '{priority_attr_name}' on '{add_on.__class__.__name__}' must be a number.")
+                            prioritized_addons.append({'add_on': add_on, 'hook': hook, 'priority': priority})
                     prioritized_addons.sort(key=operator.itemgetter('priority'), reverse=True)
                     execution_list = prioritized_addons
                 
                 else: # mode == "loop"
-                    # --- ✨ FIX WAS APPLIED HERE ---
-                    # Use getattr with a default (None) to prevent AttributeError
                     execution_list = [{'add_on': add_on, 'hook': getattr(add_on, hook_name, None), 'priority': None} 
                                       for add_on in add_on_list]
-                    # --- End Fix ---
 
                 for item in execution_list:
                     add_on = item['add_on']
                     hook = item['hook']
                     
                     if mode == "loop":
-                        # This check now correctly catches 'None' from getattr
                         if not callable(hook):
                             continue
-                        
                         base_method = getattr(BaseAddOn, hook_name, None)
                         if hook.__func__ == base_method:
                             continue
@@ -103,7 +78,7 @@ def run(hook_name: str, mode: str = "loop", track: bool = False, order: int = 99
                     if is_tracing and config.get('time_track'):
                         start_time = time.perf_counter()
 
-                    state = hook(state, pipeline_extra_info, **kwargs)
+                    state = hook(state, pipeline_extra_info, **kwargs) 
 
                     if is_tracing:
                         elapsed_time = 0
@@ -124,12 +99,10 @@ def run(hook_name: str, mode: str = "loop", track: bool = False, order: int = 99
                         log.append(trace_data)
 
             elif mode == "one_time":
-                # ... (Existing 'one_time' logic) ...
                 implementing_addons: List[BaseAddOn] = []
                 for add_on in self.add_ons:
                     hook = getattr(add_on, hook_name, None)
                     base_method = getattr(BaseAddOn, hook_name, None)
-                    
                     if callable(hook) and hook.__func__ != base_method:
                         implementing_addons.append(add_on)
 
@@ -137,11 +110,7 @@ def run(hook_name: str, mode: str = "loop", track: bool = False, order: int = 99
                     return state 
                 elif len(implementing_addons) > 1:
                     addon_names = [a.__class__.__name__ for a in implementing_addons]
-                    raise ValueError(
-                        f"❌ '{hook_name}' is a 'onetime' hook, but it was implemented "
-                        f"by more than one add-on: {', '.join(addon_names)}. "
-                        f"Only one add-on is permitted for this step."
-                    )
+                    raise ValueError(f"❌ '{hook_name}' is 'onetime', but implemented by: {', '.join(addon_names)}.")
                 
                 add_on = implementing_addons[0]
                 hook = getattr(add_on, hook_name)
@@ -167,12 +136,9 @@ def run(hook_name: str, mode: str = "loop", track: bool = False, order: int = 99
                     })
             else:
                 valid_modes = ["loop", "priority_loop", "one_time"]
-                raise ValueError(
-                    f"❌ Invalid run mode: '{mode}'. Must be one of: {', '.join(valid_modes)}."
-                )
+                raise ValueError(f"❌ Invalid run mode: '{mode}'. Must be one of: {', '.join(valid_modes)}.")
             return state
         
-        # --- Attach info to the wrapper ---
         wrapper._pipeline_hook_name = hook_name
         wrapper._pipeline_hook_mode = mode
         wrapper._pipeline_hook_order = order

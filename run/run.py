@@ -19,6 +19,7 @@ from add_ons.candle_shape_add_on import CandleShapeFeaturesAddOn
 from add_ons.drop_column_windowing_add_on import DropColumnsAddOn
 from utils.filter_sequences import FilterInvalidSequencesAddOn
 from add_ons.prepare_output import PrepareOutputAddOn
+from add_ons.RootPower import RootPowerMapperAddOn
 
 # ---------------- Train ---------------- #
 def train_model(
@@ -48,7 +49,12 @@ def train_model(
     feature_pipeline = FeaturePipeline(
         add_ons=[
             SequencerAddOn(include_cols=None, exclude_cols=None),
-            CandleNormalizationAddOn(reduce=1),
+            CandleNormalizationAddOn(),
+            RootPowerMapperAddOn(
+            p=1/4, # Use a root power for aggressive variance increase
+            main=["open_prop", "high_prop", "low_prop", "close_prop"], # Apply to features
+            y=True                                # Apply to labels
+        ),
             DropColumnsAddOn(cols_map={ "main": ["open", "high", "low", "close", "volume"]}),
             FilterInvalidSequencesAddOn(),
             LabelPadder(),

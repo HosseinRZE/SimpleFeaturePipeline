@@ -3,17 +3,14 @@ import time
 from functools import wraps
 from typing import Callable, Any
 from tabulate import tabulate
+# Removed: tempfile, shutil, pathlib
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def _find_pipeline_instance(args: tuple, kwargs: dict) -> Any:
     """Helper to find the FeaturePipeline instance in function arguments."""
-    
-    # --- ✨ FIX: Changed check from 'sequencer_fn' to 'run_before_sequence' ---
-    # This check is now robust and matches your FeaturePipeline class definition.
     is_pipeline = lambda obj: hasattr(obj, 'add_ons') and hasattr(obj, 'run_before_sequence')
-    # --- End Fix ---
     
     for arg in args:
         if is_pipeline(arg):
@@ -23,10 +20,14 @@ def _find_pipeline_instance(args: tuple, kwargs: dict) -> Any:
             return val
     return None
 
+# --- Reverted to original signature (no 'preserve') ---
 def trace(time_track: bool = False, log_level: str = None):
     """
     Manages and displays a trace log of pipeline steps.
-    ...
+    
+    Args:
+        time_track (bool): Whether to track execution time.
+        log_level (str): Logging level.
     """
     def decorator(func: Callable):
         @wraps(func)
@@ -34,16 +35,15 @@ def trace(time_track: bool = False, log_level: str = None):
             pipeline_instance = _find_pipeline_instance(args, kwargs)
 
             if not pipeline_instance:
-                # This will now correctly execute if no pipeline is found
                 return func(*args, **kwargs)
 
-            # 1. SETUP: Attach log and config to the pipeline instance
-            # ... (rest of the trace decorator is unchanged) ...
+            # --- Reverted to simple config (no 'log_dir' or 'preserve') ---
             pipeline_instance._trace_log = []
             pipeline_instance._trace_config = {
                 'time_track': time_track,
                 'log_level': log_level.upper() if log_level else None
             }
+            # --- End Reversion ---
 
             try:
                 # 2. EXECUTION
@@ -56,6 +56,8 @@ def trace(time_track: bool = False, log_level: str = None):
                 
                 print("\n" + "="*len(header_text))
                 print(header_text)
+
+                # --- Removed "Artifacts preserved at..." print block ---
 
                 if not log_data:
                     print("No tracked steps were executed.")
@@ -71,7 +73,14 @@ def trace(time_track: bool = False, log_level: str = None):
                             record.append(f"{row.get('time', 0):.4f}")
                         table_data.append(record)
 
-                    table = tabulate(table_data, headers=headers, tablefmt="fancy_grid")
+                    # --- Removed 'maxcolwidths' from tabulate ---
+                    table = tabulate(
+                        table_data, 
+                        headers=headers, 
+                        tablefmt="fancy_grid"
+                    )
+                    # --- End Reversion ---
+                    
                     print(table)
 
                     if config['log_level']:
@@ -81,8 +90,11 @@ def trace(time_track: bool = False, log_level: str = None):
 
                 print("="*len(header_text) + "\n")
 
+                # --- Removed 'shutil.rmtree' cleanup logic ---
+
                 # 4. CLEANUP
                 delattr(pipeline_instance, '_trace_log')
                 delattr(pipeline_instance, '_trace_config')
+                
         return wrapper
     return decorator

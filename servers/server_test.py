@@ -24,9 +24,9 @@ from servers.pre_process.data_store_mock import DataStoreMock # Assuming DataSto
 app = Flask(__name__)
 
 # ---------------- Load model and meta ----------------
-meta_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251027_160906/meta_train_model_20251027_160906.pkl")
-state_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251027_160906/model_train_model_20251027_160906.pt")
-pipeline_path = "/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251027_160906/pipeline_train_model_20251027_160906.pkl"
+meta_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251029_200541/meta_train_model_20251029_200541.pkl")
+state_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251029_200541/model_train_model_20251029_200541.pt")
+pipeline_path = "/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251029_200541/pipeline_train_model_20251029_200541.pkl"
 
 # Pick the newest (last modified)
 meta_path = max(meta_files, key=os.path.getmtime)
@@ -116,6 +116,7 @@ def get_and_add_data():
         
         return jsonify({"next_idx": next_idx + 1, "candle": candle})
     
+@trace(time_track=True, log_level='INFO', preserve=True) 
 @app.route("/predict", methods=['POST'])
 def predict():
     print("\n==== /predict called ====")
@@ -148,18 +149,10 @@ def predict():
     )
     model.eval() # Set model to evaluation mode
     predictions_list = []
-
     with torch.no_grad(): # Disable gradient computation
         for batch in inference_loader:
             # The collate_fn formats the data
             X_batch, y_dummy_batch, lengths_batch = batch
-
-            # --- This is what your model expects ---
-            # X_batch is {'main': tensor(...), ...}
-            # y_dummy_batch is the stacked dummy_y (we ignore it)
-            # lengths_batch is {'main': tensor(...), ...}
-            # ----------------------------------------
-
             # (Optional) Move to GPU if your model is on GPU
             # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             # X_batch = {k: v.to(device) for k, v in X_batch.items()}
@@ -177,32 +170,14 @@ def predict():
         return jsonify({"error": "No data received for prediction"}), 500
         
     y_pred_np = torch.cat(predictions_list, dim=0).cpu().numpy()
+    inference_payload = {
+        "y_pred_np": y_pred_np
+    }
+    inference_payload = feature_pipeline.run_on_server_inference(inference_payload, feature_pipeline.extra_info)
+    y_pred_np_untransformed = inference_payload["y_pred_np"] 
     last_close = float(data_store_mock.current_data['close'].iloc[-1])
-    # 3. Run on_server_inference hook
-    # try:
-    #     print("➡️ Running on_server_inference...")
-    #     inference_state = {
-    #         "y_pred_raw": y_pred,
-    #         "y_pred_np": y_pred_np,
-    #         "pipeline": feature_pipeline,
-    #         "data_store": data_store_mock
-    #     }
+    scaled_pred_prices = y_pred_np_untransformed * last_close    # 4. Return results
 
-    #     state = feature_pipeline.run_on_server_inference(inference_state, feature_pipeline.extra_info)
-    #     print("✅ on_server_inference completed.")
-
-    #     scaled_pred_prices = state.get("pred_prices_scaled")
-    #     print(f"🟢 pred_prices_scaled: {scaled_pred_prices}")
-
-    #     if scaled_pred_prices is None:
-    #         raise ValueError("on_server_inference hook did not produce 'pred_prices_scaled' in the state.")
-
-    # except Exception as e:
-    #     print(f"⚠️ Warning: inference-hook failed ({type(e).__name__}): {e}")
-    #     import traceback; traceback.print_exc()
-    #     return jsonify({"error": f"Inference processing failed: {e}"}), 500
-    scaled_pred_prices = y_pred_np * last_close
-    # 4. Return results
     return jsonify({
             "pred_prices": scaled_pred_prices[0].tolist()
         })
