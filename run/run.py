@@ -53,7 +53,7 @@ def train_model(
             CandleNormalizationAddOn(),
             ArctanMapperAddOn(
                 a=3,
-                  b=1,  # Use a root power for aggressive variance increase
+                b=1,  # Use a root power for aggressive variance increase
             target_features={"main":["open_prop", "high_prop", "low_prop", "close_prop"]}, # Apply to features
             y=True,
         ),
@@ -88,11 +88,10 @@ def train_model(
             feature_pipeline=feature_pipeline,
         )
         val_ds = None
-
+    print("returned_state[max_len_y]",returned_state["max_len_y"])
     input_dim = returned_state['input_dim']
     max_len_y = returned_state['max_len_y']
     feature_columns = returned_state["feature_columns"]
-    print("feature_columns",feature_columns)
     model = VanillaFNN(
         input_dim=input_dim,
         hidden_dim=hidden_dim,

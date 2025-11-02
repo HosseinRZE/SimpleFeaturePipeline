@@ -41,7 +41,6 @@ class LabelPadder(BaseAddOn):
 
         # Save results to state
         state['y_padded'] = y_padded
-        state['max_len_y'] = max_len_y
 
         print(f"✅ Padded {len(y_list)} label sequences to shape: {y_padded.shape}")
         return state

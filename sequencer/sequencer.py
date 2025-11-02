@@ -40,10 +40,10 @@ class SequencerAddOn(BaseAddOn):
         else:
             lineprice_cols = []
 
-        # Iterate over sequences
+        # --- ✅ only track max_len_y in training mode ---
+        max_len_y = 0
+
         if server_mode:
-            # During inference, create a single "fake" label row per df_data slice
-            # For simplicity, we use the last seq_len rows
             seq_len = state.get("seq_len", 21)
             window_df = df_data.tail(seq_len).copy()
             if not feature_cols:
@@ -56,14 +56,12 @@ class SequencerAddOn(BaseAddOn):
 
             X_df = window_df[feature_cols].astype(np.float32)
             X_dict = {"main": X_df}
-            y_labels = np.zeros(len(lineprice_cols) if lineprice_cols else 1, dtype=np.float32)
+            y_labels = np.zeros(1, dtype=np.float32)  # dummy
 
             sample = SequenceSample(original_index=-1, X_features=X_dict, y_labels=y_labels, metadata={})
             samples.append(sample)
 
         else:
-                        # Training mode: use original df_labels
-            # Training mode: use original df_labels
             for original_index, row in df_labels.iterrows():
                 mask = (df_data["timestamp"] >= row["startTime"]) & (df_data["timestamp"] <= row["endTime"])
                 df_sequence = df_data.loc[mask].copy()
@@ -80,7 +78,12 @@ class SequencerAddOn(BaseAddOn):
 
                 X_df = df_sequence[feature_cols].astype(np.float32)
                 X_dict = {"main": X_df}
-                y_labels = row[lineprice_cols].astype(np.float32).fillna(0).values
+
+                # --- ✅ count only non-NaN label values ---
+                valid_labels = row[lineprice_cols].dropna().astype(np.float32)
+                y_labels = valid_labels.fillna(0).values
+                # track maximum number of valid (non-NaN) labels
+                max_len_y = max(max_len_y, len(valid_labels))
 
                 # --- ✅ Add last_close_price to metadata ---
                 last_close_price = None
@@ -98,5 +101,9 @@ class SequencerAddOn(BaseAddOn):
                     },
                 )
                 samples.append(sample)
+
+            # --- ✅ only save max_len_y in training mode ---
+            state["max_len_y"] = max_len_y
+
         state["samples"] = SequenceCollection(samples)
         return state

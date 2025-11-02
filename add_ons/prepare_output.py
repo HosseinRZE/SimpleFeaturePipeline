@@ -115,7 +115,7 @@ class PrepareOutputAddOn(BaseAddOn):
         metadata_list = self._filter_metadata(raw_metadata_list, self.metadata_keys)
         # ----------------------------------------------
         
-        y_padded = state.get("y_padded", np.array(y_list, dtype=np.float32))
+        y_padded = np.array(y_list, dtype=np.float32)
 
         if not for_torch:
             # NumPy / scikit-learn format (single flattened array)
