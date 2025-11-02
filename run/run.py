@@ -18,6 +18,7 @@ from add_ons.candle_norm_reduce_addon import CandleNormalizationAddOn
 from add_ons.candle_shape_add_on import CandleShapeFeaturesAddOn
 from add_ons.drop_column_windowing_add_on import DropColumnsAddOn
 from add_ons.real_price_multiplier import RealPriceMultiplier
+from add_ons.value_extender import ValueExtenderAddOn
 from utils.filter_sequences import FilterInvalidSequencesAddOn
 from add_ons.prepare_output import PrepareOutputAddOn
 from add_ons.RootPower import RootPowerMapperAddOn
@@ -62,6 +63,7 @@ def train_model(
             LabelPadder(),
             FeatureColumnTrackerAddOn(), 
             InputDimCalculator(),
+            ValueExtenderAddOn(n=4, v=0.0),
             PrepareOutputAddOn(metadata_keys=["last_close_price"]),
             RealPriceMultiplier()
         ])
@@ -90,7 +92,7 @@ def train_model(
         val_ds = None
     print("returned_state[max_len_y]",returned_state["max_len_y"])
     input_dim = returned_state['input_dim']
-    max_len_y = returned_state['max_len_y']
+    max_len_y = 5
     feature_columns = returned_state["feature_columns"]
     model = VanillaFNN(
         input_dim=input_dim,
@@ -164,7 +166,7 @@ if __name__ == "__main__":
         optimizer_params={},
         scheduler_params={},
         save_model= False,
-        use_mse_loss = True,
+        use_mse_loss = False,
         use_rescue = False,
        activation_functions=["elu", 
                             #  "elu", "dropout(0.1)", "elu"
