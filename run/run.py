@@ -21,6 +21,7 @@ from add_ons.real_price_multiplier import RealPriceMultiplier
 from utils.filter_sequences import FilterInvalidSequencesAddOn
 from add_ons.prepare_output import PrepareOutputAddOn
 from add_ons.RootPower import RootPowerMapperAddOn
+from add_ons.ArcTanMapper import ArctanMapperAddOn
 
 def train_model(
     data_csv,
@@ -50,9 +51,10 @@ def train_model(
         add_ons=[
             SequencerAddOn(include_cols=None, exclude_cols=None),
             CandleNormalizationAddOn(),
-            RootPowerMapperAddOn(
-            p=1/4, # Use a root power for aggressive variance increase
-            main=["open_prop", "high_prop", "low_prop", "close_prop"], # Apply to features
+            ArctanMapperAddOn(
+                a=3,
+                  b=1,  # Use a root power for aggressive variance increase
+            target_features={"main":["open_prop", "high_prop", "low_prop", "close_prop"]}, # Apply to features
             y=True,
         ),
             DropColumnsAddOn(cols_map={ "main": ["open", "high", "low", "close", "volume"]}),
@@ -69,7 +71,7 @@ def train_model(
         ("pipeline", "pkl"),
         "fnn"
     ])
-    feature_pipeline.method_table()
+    # feature_pipeline.method_table()
     # Preprocess: pad linePrices and sequences
     if do_validation:
         train_ds, val_ds, returned_state = preprocess_pipeline(
@@ -153,17 +155,19 @@ if __name__ == "__main__":
         "/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles.csv",
         "/home/iatell/projects/meta-learning/data/baseline_regression.csv",
         do_validation=True,
-        test_mode = True,
+        test_mode = False,
         max_epochs=200,
         hidden_dim=100,
-        lr=0.01,
+        lr=0.001,
         batch_size=50,
         optimizer_name= "adamw",
-        scheduler_name = "onecycle",
+        scheduler_name = None,
         optimizer_params={},
         scheduler_params={},
-        save_model= True,
-        use_mse_loss = False,
+        save_model= False,
+        use_mse_loss = True,
         use_rescue = False,
-       activation_functions=["elu", "elu", "dropout(0.1)", "elu"] #"leaky_relu" "sigmoid" "tanh"  "elu" "relu" "swish" "mish"
+       activation_functions=["elu", 
+                            #  "elu", "dropout(0.1)", "elu"
+                             ] #"leaky_relu" "sigmoid" "tanh"  "elu" "relu" "swish" "mish"
     )
