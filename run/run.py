@@ -90,7 +90,7 @@ def train_model(
     input_dim = returned_state['input_dim']
     max_len_y = returned_state['max_len_y']
     feature_columns = returned_state["feature_columns"]
-
+    print("feature_columns",feature_columns)
     model = VanillaFNN(
         input_dim=input_dim,
         hidden_dim=hidden_dim,
@@ -153,7 +153,7 @@ if __name__ == "__main__":
         "/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles.csv",
         "/home/iatell/projects/meta-learning/data/baseline_regression.csv",
         do_validation=True,
-        test_mode = False,
+        test_mode = True,
         max_epochs=200,
         hidden_dim=100,
         lr=0.01,

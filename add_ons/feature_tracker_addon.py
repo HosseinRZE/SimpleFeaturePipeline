@@ -5,7 +5,8 @@ import pandas as pd
 
 class FeatureColumnTrackerAddOn(BaseAddOn):
     """
-    Ensures the global 'feature_cols' list in the state is accurate.
+    Ensures the global 'feature_cols' in the state is a DICT mapping 
+    feature group key to its list of columns.
 
     This AddOn runs late in the pipeline (high priority) to inspect the 
     DataFrame columns of the first SequenceSample after all prior AddOns 
@@ -26,8 +27,8 @@ class FeatureColumnTrackerAddOn(BaseAddOn):
 
     def apply_window(self, state: Dict[str, Any], pipeline_extra_info: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Inspects the features of the first sample and sets the global 'feature_cols'
-        to match the final DataFrame columns.
+        Inspects the features of the first sample and sets the global 'feature_columns'
+        to a dictionary mapping the feature group key to the final column list.
         """
         samples_collection: SequenceCollection = state.get('samples')
         
@@ -39,7 +40,12 @@ class FeatureColumnTrackerAddOn(BaseAddOn):
         X_df: pd.DataFrame = first_sample.X.get(self.feature_group_key)
         
         if X_df is not None:
-            # Set the global feature_cols list based on the actual columns in the DataFrame
-            state['feature_columns'] = X_df.columns.tolist()
+            # --- FIX APPLIED HERE ---
+            # Set the global feature_columns to a dict: {key: [column_names]}
+            # This matches the expected format for 'run_debug_mode'
+            state['feature_columns'] = {
+                self.feature_group_key: X_df.columns.tolist()
+            }
+            # --- END OF FIX ---
             
         return state
