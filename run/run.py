@@ -22,7 +22,6 @@ from utils.filter_sequences import FilterInvalidSequencesAddOn
 from add_ons.prepare_output import PrepareOutputAddOn
 from add_ons.RootPower import RootPowerMapperAddOn
 
-# ---------------- Train ---------------- #
 def train_model(
     data_csv,
     labels_csv,
@@ -54,7 +53,7 @@ def train_model(
             RootPowerMapperAddOn(
             p=1/4, # Use a root power for aggressive variance increase
             main=["open_prop", "high_prop", "low_prop", "close_prop"], # Apply to features
-            y=True                                # Apply to labels
+            y=True,
         ),
             DropColumnsAddOn(cols_map={ "main": ["open", "high", "low", "close", "volume"]}),
             FilterInvalidSequencesAddOn(),
@@ -106,7 +105,7 @@ def train_model(
         use_rescue = use_rescue
     )
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_batch)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_batch)
     val_loader = DataLoader(val_ds, batch_size=batch_size, collate_fn=collate_batch) if val_ds else None
     if early_stop:
         # Define the output directory for this specific experiment/model
@@ -154,8 +153,8 @@ if __name__ == "__main__":
         "/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles.csv",
         "/home/iatell/projects/meta-learning/data/baseline_regression.csv",
         do_validation=True,
-        test_mode = True,
-        max_epochs=100,
+        test_mode = False,
+        max_epochs=200,
         hidden_dim=100,
         lr=0.01,
         batch_size=50,
