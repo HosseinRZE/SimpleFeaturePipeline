@@ -60,7 +60,6 @@ def train_model(
         ),
             DropColumnsAddOn(cols_map={ "main": ["open", "high", "low", "close", "volume"]}),
             FilterInvalidSequencesAddOn(),
-            LabelPadder(),
             FeatureColumnTrackerAddOn(), 
             InputDimCalculator(),
             ValueExtenderAddOn(n=4, v=0.0),
@@ -73,7 +72,7 @@ def train_model(
         ("pipeline", "pkl"),
         "fnn"
     ])
-    # feature_pipeline.method_table()
+    feature_pipeline.method_table()
     # Preprocess: pad linePrices and sequences
     if do_validation:
         train_ds, val_ds, returned_state = preprocess_pipeline(
@@ -156,7 +155,7 @@ if __name__ == "__main__":
         "/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles.csv",
         "/home/iatell/projects/meta-learning/data/baseline_regression.csv",
         do_validation=True,
-        test_mode = False,
+        test_mode = True,
         max_epochs=200,
         hidden_dim=100,
         lr=0.001,
