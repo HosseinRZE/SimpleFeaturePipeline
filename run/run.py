@@ -12,10 +12,9 @@ from utils.run_debug_mode import run_debug_mode
 from utils.save_model_files import save_model_files
 from sequencer.sequencer import SequencerAddOn
 from add_ons.feature_tracker_addon import FeatureColumnTrackerAddOn
-from add_ons.label_padder_add_on import LabelPadder
+from add_ons.candle_proportion_simple import CandleShapeFeaturesAddOn
 from add_ons.input_dim_calculator import InputDimCalculator
-from add_ons.candle_norm_reduce_addon import CandleNormalizationAddOn
-from add_ons.candle_shape_add_on import CandleShapeFeaturesAddOn
+from add_ons.candle_normalization_addon import CandleNormalizationAddOn
 from add_ons.drop_column_windowing_add_on import DropColumnsAddOn
 from add_ons.real_price_multiplier import RealPriceMultiplier
 from add_ons.value_extender import ValueExtenderAddOn
@@ -23,6 +22,9 @@ from utils.filter_sequences import FilterInvalidSequencesAddOn
 from add_ons.prepare_output import PrepareOutputAddOn
 from add_ons.RootPower import RootPowerMapperAddOn
 from add_ons.ArcTanMapper import ArctanMapperAddOn
+from add_ons.pct_change import PctChangeMapperAddOn
+from add_ons.price_rate_change import PriceRateChange
+from add_ons.universal_scaler_add_on import ScalerMapperAddOn
 
 def train_model(
     data_csv,
@@ -46,23 +48,34 @@ def train_model(
     use_rescue = False,
     activation_functions = ["relu"]
 ):
-    
     # 2. Create the pipeline and add your modules
     feature_pipeline = FeaturePipeline(
         add_ons=[
             SequencerAddOn(include_cols=None, exclude_cols=None),
+            CandleShapeFeaturesAddOn(),
             CandleNormalizationAddOn(),
-            ArctanMapperAddOn(
-                a=3,
-                b=1,  # Use a root power for aggressive variance increase
-            target_features={"main":["open_prop", "high_prop", "low_prop", "close_prop"]}, # Apply to features
-            y=True,
-        ),
+            PriceRateChange(),
+            ScalerMapperAddOn(
+                method="standard",
+                y=True,
+                features={"main": ["open_prop", "high_prop", "low_prop", "close_prop"]},),
+        #     ArctanMapperAddOn(
+        #         a=3,
+        #         b=1,  # Use a root power for aggressive variance increase
+        #     target_features={"main":["open_prop", "high_prop", "low_prop", "close_prop"]}, # Apply to features
+        #     y=True,
+        # ),
+            RootPowerMapperAddOn(
+                p=0.33,
+                b=1,
+                target_features={"main": ["open_prop", "high_prop", "low_prop", "close_prop"]},
+                transform_y=True,
+            ),
             DropColumnsAddOn(cols_map={ "main": ["open", "high", "low", "close", "volume"]}),
             FilterInvalidSequencesAddOn(),
             FeatureColumnTrackerAddOn(), 
             InputDimCalculator(),
-            ValueExtenderAddOn(n=4, v=0.0),
+            # ValueExtenderAddOn(n=4, v=0.0),
             PrepareOutputAddOn(metadata_keys=["last_close_price"]),
             RealPriceMultiplier()
         ])
@@ -91,7 +104,8 @@ def train_model(
         val_ds = None
     print("returned_state[max_len_y]",returned_state["max_len_y"])
     input_dim = returned_state['input_dim']
-    max_len_y = 5
+    # max_len_y = 5
+    max_len_y = returned_state["max_len_y"]
     feature_columns = returned_state["feature_columns"]
     model = VanillaFNN(
         input_dim=input_dim,
@@ -125,9 +139,7 @@ def train_model(
         gradient_clip_algorithm="norm",
         callbacks= callbacks if early_stop else None
     )
-
     trainer.fit(model, train_loader, val_loader)
-
     # --- Debug / Test mode --- #
     if test_mode:
         save_model, df_seq = run_debug_mode(train_loader, feature_columns, test_mode)
@@ -155,7 +167,7 @@ if __name__ == "__main__":
         "/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles.csv",
         "/home/iatell/projects/meta-learning/data/baseline_regression.csv",
         do_validation=True,
-        test_mode = True,
+        test_mode = False,
         max_epochs=200,
         hidden_dim=100,
         lr=0.001,
@@ -164,7 +176,7 @@ if __name__ == "__main__":
         scheduler_name = None,
         optimizer_params={},
         scheduler_params={},
-        save_model= False,
+        save_model= True,
         use_mse_loss = False,
         use_rescue = False,
        activation_functions=["elu", 

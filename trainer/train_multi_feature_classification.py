@@ -5,7 +5,7 @@ import pandas as pd
 from torch.utils.data import DataLoader
 from sklearn.metrics import classification_report, confusion_matrix
 from datetime import datetime
-from add_ons.relative_change import add_pct_changes
+from add_ons.pct_change import add_pct_changes
 from add_ons.drop_column import drop_columns
 from add_ons.zigzag_single import add_zigzag
 from preprocess.classification_pre2 import preprocess_csv

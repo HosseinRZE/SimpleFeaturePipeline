@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Dict, Any
 from add_ons.base_addon import BaseAddOn
-
+from utils.decorators.priority import priority
 class RealPriceMultiplier(BaseAddOn):
     """
     AddOn to scale normalized/multiplied predictions back to real prices
@@ -11,8 +11,9 @@ class RealPriceMultiplier(BaseAddOn):
     are multipliers (e.g., 1.05 for +5%) relative to the last close price.
     """
     def __init__(self):
-        self.on_evaluation_priority = 1
+        super().__init__()
         
+    @priority(10)   
     def on_evaluation(
         self, 
         eval_data: Dict[str, Any], 
@@ -46,7 +47,8 @@ class RealPriceMultiplier(BaseAddOn):
         
         print("  ✅ RealPriceMultiplier: Scaled predictions and labels to real prices.")
         return eval_data
-
+    
+    @priority(10) 
     def on_server_inference(
         self, 
         inference_payload: Dict[str, Any], 

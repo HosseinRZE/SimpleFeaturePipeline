@@ -14,19 +14,16 @@ from utils.padding_batch_reg import collate_batch
 # Import necessary classes
 # Note: LSTMKernelAttentionLSTMMultiRegressor needs to be importable
 from models.neural_nets.vanilla_fnn import VanillaFNN
-
-
 # Assuming the updated FeaturePipeline class and DataStoreMock are available
 # Replace 'ServerPreprocess' import with 'DataStoreMock'
-from servers.pre_process.multi_reg_dif_seq2 import build_pipeline_from_config
 from servers.pre_process.data_store_mock import DataStoreMock # Assuming DataStoreMock is in a separate file or defined above
 
 app = Flask(__name__)
 
 # ---------------- Load model and meta ----------------
-meta_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251029_200541/meta_train_model_20251029_200541.pkl")
-state_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251029_200541/model_train_model_20251029_200541.pt")
-pipeline_path = "/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251029_200541/pipeline_train_model_20251029_200541.pkl"
+meta_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251107_163052/meta_train_model_20251107_163052.pkl")
+state_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251107_163052/model_train_model_20251107_163052.pt")
+pipeline_path = "/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251107_163052/pipeline_train_model_20251107_163052.pkl"
 
 # Pick the newest (last modified)
 meta_path = max(meta_files, key=os.path.getmtime)
@@ -56,7 +53,6 @@ state = {
     "data_store": data_store_mock 
 }
 # Execute the initialization hook
-state = feature_pipeline.run_on_server_init(state, feature_pipeline.extra_info)
 # Note: In a real app, any essential objects like the DataStoreMock 
 # should be retrieved and stored globally if modified by the hook.
 # For simplicity, we keep the global 'data_store_mock'.
@@ -79,7 +75,6 @@ def get_and_add_data():
             # Run the hook before adding data to the mock 
             # (allowing add-ons to modify initial_data or state if needed)
             state = {"initial_data": initial_data, "initial_seq_len": initial_seq_len, "data_store": data_store_mock}
-            state = feature_pipeline.run_on_first_request(state, feature_pipeline.extra_info)
             initial_data_to_add = state.get("initial_data", initial_data) # Use potentially modified data
 
             # Add data to the mock
@@ -116,7 +111,6 @@ def get_and_add_data():
         
         return jsonify({"next_idx": next_idx + 1, "candle": candle})
     
-@trace(time_track=True, log_level='INFO', preserve=True) 
 @app.route("/predict", methods=['POST'])
 def predict():
     print("\n==== /predict called ====")
@@ -152,14 +146,12 @@ def predict():
     with torch.no_grad(): # Disable gradient computation
         for batch in inference_loader:
             # The collate_fn formats the data
-            X_batch, y_dummy_batch, lengths_batch = batch
+            X_batch, y_dummy_batch, lengths_batch, _ = batch
             # (Optional) Move to GPU if your model is on GPU
             # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             # X_batch = {k: v.to(device) for k, v in X_batch.items()}
             # lengths_batch = {k: v.to(device) for k, v in lengths_batch.items()}
             # model.to(device)
-            print("batch",batch)
-            print("X_batch", X_batch)
             # 4. Call your model
             predictions = model(X_batch, lengths_batch)
 
@@ -177,9 +169,9 @@ def predict():
     }
     inference_payload = feature_pipeline.run_on_server_inference(inference_payload, feature_pipeline.extra_info)
     scaled_pred_prices = inference_payload["y_pred_np"]   # 4. Return results
-
+    print(f"🟩 Prediction successful: {scaled_pred_prices}")
     return jsonify({
-            "pred_prices": scaled_pred_prices[0].tolist()
+            "pred_prices": scaled_pred_prices.tolist()
         })
 if __name__ == "__main__":
     app.run(debug=True, use_reloader=False)

@@ -18,6 +18,13 @@ class ArctanMapperAddOn(BaseAddOn):
     
     This function expands values near x=b (controlled by A) and 
     clamps the output strictly between -1 and 1.
+    example:
+                ArctanMapperAddOn(
+                a=3,
+                b=1,  # Use a root power for aggressive variance increase
+            target_features={"main":["open_prop", "high_prop", "low_prop", "close_prop"]}, # Apply to features
+            y=True,
+        )
     """
 
     def __init__(self, a: float = 1.0, b: float = 1.0, y: bool = False, target_features: Dict[str, List[str]] = {}):
@@ -31,7 +38,6 @@ class ArctanMapperAddOn(BaseAddOn):
             **feature_config (List[str]): Configuration mapping feature groups to column lists.
                 Example: ArctanMapperAddOn(a=10, y=True, main=['col1', 'col2'], aux=['col3'])
         """
-        super().__init__() # Added super() call
         self.A = a
         self.b = b
         self.y = y # Use the explicit 'y' argument
@@ -234,7 +240,7 @@ class ArctanMapperAddOn(BaseAddOn):
         print(f"ArctanMapperAddOn: Inverse-transforming y_pred_np with A={A:.4f}, B={B:.4f}...")
         
         # Apply the inverse transform and update the state
-        state["y_pred_np"] = self._inverse_transform(y_pred_np, A, B)
+        state["y_pred_np"] = self._inverse_transform(y_pred_np, A, B).flatten()
             
         return state
 

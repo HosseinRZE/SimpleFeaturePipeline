@@ -1,7 +1,7 @@
 import pandas as pd 
 import importlib
 from utils.make_step import make_step
-from add_ons.feature_pipeline5 import FeaturePipeline
+# from add_ons.feature_pipeline5 import FeaturePipeline
 import numpy as np
 import logging
 logger = logging.getLogger(__name__)  
@@ -229,18 +229,6 @@ def import_function(module_name, func_name):
     """
     module = importlib.import_module(module_name)
     return getattr(module, func_name)
-
-def build_pipeline_from_config(cfg):
-    steps = []
-    for step_cfg in cfg["steps"]:
-        func = import_function(step_cfg["module"], step_cfg["func"])
-        steps.append(make_step(func, **step_cfg.get("kwargs", {})))
-
-    return FeaturePipeline(
-        steps=steps,
-        norm_methods=cfg["norm_methods"],
-        per_window_flags=cfg["per_window_flags"]
-    )
 
 def import_class(module_name, class_name):
     """Dynamically import a class by module + name"""

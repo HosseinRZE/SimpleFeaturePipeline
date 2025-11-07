@@ -10,6 +10,7 @@ from sklearn.base import BaseEstimator
 from add_ons.base_addon import BaseAddOn
 from data_structure.sequence_collection import SequenceCollection
 from data_structure.sequence_sample import SequenceSample
+from utils.decorators.priority import priority
 
 # ------------------------------------------------------------
 # Registry and Keys
@@ -47,14 +48,14 @@ class ScalerMapperAddOn(BaseAddOn):
                  features: Dict[str, List[str]] = None, 
                  y: bool = False, 
                  same_bucket: bool = True):
-        
         super().__init__()
         self.method = method.lower()
         self.y = y
         self.features = features or {}
         self.same_bucket = same_bucket
         self._target_feature_groups = list(self.features.keys())
-
+        self.on_server_inference_priority = 2
+        self.on_evaluation_priority = 2
         # Validate method
         ScalerClass = _SUPPORTED_METHODS.get(self.method)
         if ScalerClass is None:
@@ -78,9 +79,7 @@ class ScalerMapperAddOn(BaseAddOn):
                 for col_name in cols:
                     self.per_column_scalers[(group_key, col_name)] = ScalerClass()
             self.y_scaler = ScalerClass() if self.y else None
-        
-        self.on_evaluation_priority = 2
-
+            
     # ------------------------------------------------------------------
     # Utility functions (from pattern)
     # ------------------------------------------------------------------
@@ -103,7 +102,9 @@ class ScalerMapperAddOn(BaseAddOn):
     # ------------------------------------------------------------------
     
     def transformation(self, state: Dict[str, Any], pipeline_extra_info: Dict[str, Any]) -> Dict[str, Any]:
+        
         samples: SequenceCollection = state.get("samples")
+        print("sample.y universal",samples.get_by_original_index(1).y)
         if not samples:
             self.add_trace_print(pipeline_extra_info, "No samples found; skipping scaling.")
             return state
@@ -169,7 +170,6 @@ class ScalerMapperAddOn(BaseAddOn):
             # Transform Y
             if self.y and sample.y is not None and sample.y.size > 0:
                 sample.y = self.master_scaler.transform(sample.y.reshape(-1, 1)).flatten()
-
         pipeline_extra_info[_MASTER_SCALER_KEY] = self.master_scaler
 
     def _transform_sample_group_master(self, data_object: Any, group_key: str, cols: List[str], sample: SequenceSample, pipeline_extra_info: Dict[str, Any]):
@@ -267,7 +267,7 @@ class ScalerMapperAddOn(BaseAddOn):
     # ------------------------------------------------------------------
     # Inverse & Server Hooks (now check for Master or Y scaler)
     # ------------------------------------------------------------------
-    
+    @priority(2) 
     def on_evaluation(self, eval_data: Dict[str, Any], pipeline_extra_info: Dict[str, Any]) -> Dict[str, Any]:
         if not self.y: return eval_data
         
@@ -278,7 +278,6 @@ class ScalerMapperAddOn(BaseAddOn):
         if scaler is None:
             print("ScalerMapperAddOn: No y_scaler or master_scaler found; skipping inverse transform.")
             return eval_data
-
         print(f"ScalerMapperAddOn: Inverse-transforming eval data with {self.method}...")
         for key in ["all_preds_reg", "all_labels_reg"]:
             arr = eval_data.get(key)
@@ -288,10 +287,10 @@ class ScalerMapperAddOn(BaseAddOn):
                 except Exception as e:
                     print(f"ScalerMapperAddOn: Failed inverse-transform on {key}: {e}")
         return eval_data
-
+    
+    @priority(2) 
     def on_server_inference(self, state: Dict[str, Any], pipeline_extra_info: Dict[str, Any]) -> Dict[str, Any]:
         if not self.y: return state
-
         # Determine which scaler to use
         scaler: Any = pipeline_extra_info.get(_MASTER_SCALER_KEY)
         if scaler is None:
@@ -305,6 +304,7 @@ class ScalerMapperAddOn(BaseAddOn):
             state["y_pred_np"] = scaler.inverse_transform(y_pred_np.reshape(-1, 1)).flatten()
         except Exception as e:
             print(f"ScalerMapperAddOn: Failed inverse-transform on y_pred_np: {e}")
+        
         return state
 
     def on_server_request(self, state: Dict[str, Any], pipeline_extra_info: Dict[str, Any]) -> Dict[str, Any]:

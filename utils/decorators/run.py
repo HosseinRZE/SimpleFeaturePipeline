@@ -56,7 +56,7 @@ def run(hook_name: str, mode: str = "loop", track: bool = False, order: int = 99
                             if not isinstance(priority, (int, float)):
                                 raise TypeError(f"❌ Priority attribute '{priority_attr_name}' on '{add_on.__class__.__name__}' must be a number.")
                             prioritized_addons.append({'add_on': add_on, 'hook': hook, 'priority': priority})
-                    prioritized_addons.sort(key=operator.itemgetter('priority'), reverse=True)
+                    prioritized_addons.sort(key=operator.itemgetter('priority'), reverse=False)
                     execution_list = prioritized_addons
                 
                 else: # mode == "loop"
