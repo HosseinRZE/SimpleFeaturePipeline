@@ -104,7 +104,6 @@ class ScalerMapperAddOn(BaseAddOn):
     def transformation(self, state: Dict[str, Any], pipeline_extra_info: Dict[str, Any]) -> Dict[str, Any]:
         
         samples: SequenceCollection = state.get("samples")
-        print("sample.y universal",samples.get_by_original_index(1).y)
         if not samples:
             self.add_trace_print(pipeline_extra_info, "No samples found; skipping scaling.")
             return state
@@ -112,18 +111,20 @@ class ScalerMapperAddOn(BaseAddOn):
         self.add_trace_print(pipeline_extra_info, f"Applying {self.method} scaler (Y={self.y}, same_bucket={self.same_bucket}).")
 
         if self.same_bucket:
-            self._fit_transform_master(samples, pipeline_extra_info)
+            # <--- MODIFIED: Split into fit and transform
+            self._fit_master(samples, pipeline_extra_info)
+            self._transform_master(samples, pipeline_extra_info)
         else:
-            self._fit_transform_per_column(samples, pipeline_extra_info)
+            # <--- MODIFIED: Split into fit and transform
+            self._fit_per_column(samples, pipeline_extra_info)
+            self._transform_per_column(samples, pipeline_extra_info)
 
         return state
 
     # --- STRATEGY 1: same_bucket=True ---
 
-    def _fit_transform_master(self, samples: SequenceCollection, pipeline_extra_info: Dict[str, Any]):
-        """Fits one scaler to ALL data, then transforms ALL data."""
-        
-        # 1. FIT
+    def _fit_master(self, samples: SequenceCollection, pipeline_extra_info: Dict[str, Any]):
+        """Fits one scaler to ALL data."""
         all_data_to_fit = []
         for sample in samples:
             # Collect X features
@@ -158,10 +159,17 @@ class ScalerMapperAddOn(BaseAddOn):
             self.master_scaler.fit(X_train)
             self.add_trace_print(pipeline_extra_info, f"Fitted Master scaler on shape {X_train.shape}")
         except Exception as e:
-             self.add_trace_print(pipeline_extra_info, f"🔥 MasterScaler: Error fitting: {e}")
-             return
+            self.add_trace_print(pipeline_extra_info, f"🔥 MasterScaler: Error fitting: {e}")
+            return
+            
+        pipeline_extra_info[_MASTER_SCALER_KEY] = self.master_scaler
 
-        # 2. TRANSFORM
+    def _transform_master(self, samples: SequenceCollection, pipeline_extra_info: Dict[str, Any]):
+        """Transforms ALL data using the fitted master scaler."""
+        if not hasattr(self.master_scaler, 'n_features_in_'):
+             self.add_trace_print(pipeline_extra_info, "MasterScaler: Not fitted; skipping transform.")
+             return
+             
         for sample in samples:
             # Transform X
             for group_key, cols in self.features.items():
@@ -170,7 +178,6 @@ class ScalerMapperAddOn(BaseAddOn):
             # Transform Y
             if self.y and sample.y is not None and sample.y.size > 0:
                 sample.y = self.master_scaler.transform(sample.y.reshape(-1, 1)).flatten()
-        pipeline_extra_info[_MASTER_SCALER_KEY] = self.master_scaler
 
     def _transform_sample_group_master(self, data_object: Any, group_key: str, cols: List[str], sample: SequenceSample, pipeline_extra_info: Dict[str, Any]):
         """Helper for same_bucket=True transform"""
@@ -193,7 +200,7 @@ class ScalerMapperAddOn(BaseAddOn):
 
     # --- STRATEGY 2: same_bucket=False ---
 
-    def _fit_transform_per_column(self, samples: SequenceCollection, pipeline_extra_info: Dict[str, Any]):
+    def _fit_per_column(self, samples: SequenceCollection, pipeline_extra_info: Dict[str, Any]):
         """Fits an independent scaler for each column."""
         
         # 1. FIT X SCALERS
@@ -228,19 +235,21 @@ class ScalerMapperAddOn(BaseAddOn):
             if y_concat:
                 self.y_scaler.fit(np.vstack(y_concat))
 
-        # 3. TRANSFORM
+        # 3. SAVE to pipeline_extra_info
+        pipeline_extra_info[_X_SCALER_DICT_KEY] = self.per_column_scalers
+        if self.y:
+            pipeline_extra_info[_Y_SCALER_KEY] = self.y_scaler
+
+    def _transform_per_column(self, samples: SequenceCollection, pipeline_extra_info: Dict[str, Any]):
+        """Transforms each column using its own fitted scaler."""
         for sample in samples:
             # Transform X
             for group_key, cols in self.features.items():
                 if group_key in sample.X:
                     self._transform_sample_group_per_column(sample.X[group_key], group_key, cols, sample, pipeline_extra_info)
             # Transform Y
-            if self.y and sample.y is not None and sample.y.size > 0:
+            if self.y and sample.y is not None and sample.y.size > 0 and hasattr(self.y_scaler, 'n_features_in_'):
                 sample.y = self.y_scaler.transform(sample.y.reshape(-1, 1)).flatten()
-
-        pipeline_extra_info[_X_SCALER_DICT_KEY] = self.per_column_scalers
-        if self.y:
-            pipeline_extra_info[_Y_SCALER_KEY] = self.y_scaler
 
     def _transform_sample_group_per_column(self, data_object: Any, group_key: str, cols: List[str], sample: SequenceSample, pipeline_extra_info: Dict[str, Any]):
         """Helper for same_bucket=False transform"""
@@ -318,10 +327,8 @@ class ScalerMapperAddOn(BaseAddOn):
             # --- Restore and run MASTER mode ---
             self.master_scaler = master_scaler
             print(f"ScalerMapperAddOn: Applying forward {self.method} transform (MASTER BUCKET) to server features...")
-            for sample in samples:
-                for group_key, cols in self.features.items():
-                    if group_key in sample.X:
-                        self._transform_sample_group_master(sample.X[group_key], group_key, cols, sample, pipeline_extra_info)
+            # <--- MODIFIED: Simply call the reusable transform method
+            self._transform_master(samples, pipeline_extra_info)
         else:
             # --- Restore and run PER-COLUMN mode ---
             per_column_scalers = pipeline_extra_info.get(_X_SCALER_DICT_KEY)
@@ -331,9 +338,7 @@ class ScalerMapperAddOn(BaseAddOn):
             
             self.per_column_scalers = per_column_scalers
             print(f"ScalerMapperAddOn: Applying forward {self.method} transform (PER-COLUMN) to server features...")
-            for sample in samples:
-                for group_key, cols in self.features.items():
-                    if group_key in sample.X:
-                        self._transform_sample_group_per_column(sample.X[group_key], group_key, cols, sample, pipeline_extra_info)
+            # <--- MODIFIED: Simply call the reusable transform method
+            self._transform_per_column(samples, pipeline_extra_info)
         
         return state

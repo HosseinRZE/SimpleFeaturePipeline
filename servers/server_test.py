@@ -21,9 +21,9 @@ from servers.pre_process.data_store_mock import DataStoreMock # Assuming DataSto
 app = Flask(__name__)
 
 # ---------------- Load model and meta ----------------
-meta_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251107_163052/meta_train_model_20251107_163052.pkl")
-state_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251107_163052/model_train_model_20251107_163052.pt")
-pipeline_path = "/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251107_163052/pipeline_train_model_20251107_163052.pkl"
+meta_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251109_174113/meta_train_model_20251109_174113.pkl")
+state_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251109_174113/model_train_model_20251109_174113.ckpt")
+pipeline_path = "/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251109_174113/pipeline_train_model_20251109_174113.pkl"
 
 # Pick the newest (last modified)
 meta_path = max(meta_files, key=os.path.getmtime)
@@ -36,7 +36,8 @@ model = VanillaFNN.load_from_checkpoint(state_path)
 model.eval()
 
 # ---------------- Load raw data ----------------
-df = pd.read_csv("/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles.csv", parse_dates=['timestamp'])
+df = pd.read_csv("/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles.csv")
+df["timestamp"] = pd.to_datetime(df["timestamp"])
 dense_df = df.set_index('timestamp').asfreq('D').ffill()
 
 # ---------------- Setup pipeline ----------------
@@ -143,6 +144,33 @@ def predict():
     )
     model.eval() # Set model to evaluation mode
     predictions_list = []
+    # with torch.no_grad(): # Disable gradient computation
+    #         # The collate_fn formats the data
+    #         X_batch = feature_pipeline.extra_info["test_batch"]["X_batch"]
+    #         y_label = feature_pipeline.extra_info["test_batch"]["y_batch"]
+    #         preds = feature_pipeline.extra_info["test_batch"]["preds"]
+    #         lengths_batch = feature_pipeline.extra_info["test_batch"]["length"]
+    #         last_close_test = feature_pipeline.extra_info["test_batch"]["meta"]["last_close_price"]
+
+    #         predictions = model(X_batch, lengths_batch)
+    #         print("test_result:", predictions[-1],preds,y_label[-1])
+    #         y_pred_np = predictions[-1].cpu().numpy()
+    #         inference_payload = {
+    #             "y_pred_np": y_pred_np,
+    #             "last_close_price": last_close_test
+    #         }
+    #         inference_payload = feature_pipeline.run_on_server_inference(inference_payload, feature_pipeline.extra_info)
+    #         scaled_pred_prices = inference_payload["y_pred_np"]
+
+    #         y_label_np = y_label[-1].cpu().numpy()
+    #         inference_payload = {
+    #             "y_pred_np": y_label_np,
+    #             "last_close_price": last_close_test
+    #         }
+    #         inference_payload = feature_pipeline.run_on_server_inference(inference_payload, feature_pipeline.extra_info)
+    #         scaled_labeled_prices = inference_payload["y_pred_np"]
+    #         print("the difference:", scaled_pred_prices,scaled_labeled_prices)
+
     with torch.no_grad(): # Disable gradient computation
         for batch in inference_loader:
             # The collate_fn formats the data
@@ -167,6 +195,7 @@ def predict():
         "y_pred_np": y_pred_np,
         "last_close_price": last_close
     }
+    print("last_close",last_close)
     inference_payload = feature_pipeline.run_on_server_inference(inference_payload, feature_pipeline.extra_info)
     scaled_pred_prices = inference_payload["y_pred_np"]   # 4. Return results
     print(f"🟩 Prediction successful: {scaled_pred_prices}")

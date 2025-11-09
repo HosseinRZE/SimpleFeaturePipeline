@@ -1,7 +1,7 @@
 from typing import List, Dict, Any, Tuple
 import pandas as pd
 from utils.debug_samples2 import _debug_sample_check
-from add_ons.feature_pipeline_base import FeaturePipeline
+from feature_pipeline.feature_pipeline_base import FeaturePipeline
 from utils.decorators.trace import trace
 # Import the custom data structures
 from data_structure.sequence_sample import SequenceSample
@@ -54,7 +54,6 @@ def preprocess_pipeline(
     df_labels = pd.read_csv(labels_csv)
     df_labels["startTime"] = pd.to_datetime(df_labels["startTime"], unit="s")
     df_labels["endTime"] = pd.to_datetime(df_labels["endTime"], unit="s")
-    
     # --- Step 1: Initiate State ---
     # The 'state' dictionary is passed and modified throughout the pipeline.
     state: Dict[str, Any] = {

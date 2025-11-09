@@ -3,7 +3,7 @@ import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from preprocess.preprocess_final import preprocess_pipeline
 from utils.padding_batch_reg import collate_batch
-from add_ons.feature_pipeline_base import FeaturePipeline
+from feature_pipeline.feature_pipeline_base import FeaturePipeline
 from utils.generate_name import generate_filenames
 from models.neural_nets.vanilla_fnn import VanillaFNN
 from models.evaluation.multi_regression import evaluate_model
@@ -55,10 +55,10 @@ def train_model(
             CandleShapeFeaturesAddOn(),
             CandleNormalizationAddOn(),
             PriceRateChange(),
-            ScalerMapperAddOn(
-                method="standard",
-                y=True,
-                features={"main": ["open_prop", "high_prop", "low_prop", "close_prop"]},),
+            # ScalerMapperAddOn(
+            #     method="standard",
+            #     y=True,
+            #     features={"main": ["open_prop", "high_prop", "low_prop", "close_prop"]},),
         #     ArctanMapperAddOn(
         #         a=3,
         #         b=1,  # Use a root power for aggressive variance increase
@@ -80,7 +80,7 @@ def train_model(
             RealPriceMultiplier()
         ])
     model_save_path, meta_save_path, pipeline_save_path, folder_name = generate_filenames([
-        ("model", "pt"),
+        ("model", "ckpt"),
         ("meta", "pkl"),
         ("pipeline", "pkl"),
         "fnn"
@@ -144,6 +144,10 @@ def train_model(
     if test_mode:
         save_model, df_seq = run_debug_mode(train_loader, feature_columns, test_mode)
 
+    # --- Evaluation --- #
+    if do_validation:
+        metrics = evaluate_model(model, val_loader, feature_pipeline)
+
     if save_model:
         save_model_files(
             base_dir=experiment_out_dir,
@@ -156,12 +160,9 @@ def train_model(
             train_model=train_model,
         )
 
-    # --- Evaluation --- #
-    if do_validation:
-        metrics = evaluate_model(model, val_loader, feature_pipeline)
-        if return_val_accuracy:
-            return {"accuracy": metrics["mse"] * (-1)}
-        
+    if return_val_accuracy:
+        return {"accuracy": metrics["mse"] * (-1)}
+    
 if __name__ == "__main__":
     train_model(
         "/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles.csv",

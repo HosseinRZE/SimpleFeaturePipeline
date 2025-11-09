@@ -89,7 +89,6 @@ class SequencerAddOn(BaseAddOn):
                 last_close_price = None
                 if "close" in df_sequence.columns:
                     last_close_price = float(df_sequence["close"].iloc[-1])
-
                 sample = SequenceSample(
                     original_index=original_index,
                     X_features=X_dict,
