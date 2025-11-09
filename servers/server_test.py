@@ -144,32 +144,6 @@ def predict():
     )
     model.eval() # Set model to evaluation mode
     predictions_list = []
-    # with torch.no_grad(): # Disable gradient computation
-    #         # The collate_fn formats the data
-    #         X_batch = feature_pipeline.extra_info["test_batch"]["X_batch"]
-    #         y_label = feature_pipeline.extra_info["test_batch"]["y_batch"]
-    #         preds = feature_pipeline.extra_info["test_batch"]["preds"]
-    #         lengths_batch = feature_pipeline.extra_info["test_batch"]["length"]
-    #         last_close_test = feature_pipeline.extra_info["test_batch"]["meta"]["last_close_price"]
-
-    #         predictions = model(X_batch, lengths_batch)
-    #         print("test_result:", predictions[-1],preds,y_label[-1])
-    #         y_pred_np = predictions[-1].cpu().numpy()
-    #         inference_payload = {
-    #             "y_pred_np": y_pred_np,
-    #             "last_close_price": last_close_test
-    #         }
-    #         inference_payload = feature_pipeline.run_on_server_inference(inference_payload, feature_pipeline.extra_info)
-    #         scaled_pred_prices = inference_payload["y_pred_np"]
-
-    #         y_label_np = y_label[-1].cpu().numpy()
-    #         inference_payload = {
-    #             "y_pred_np": y_label_np,
-    #             "last_close_price": last_close_test
-    #         }
-    #         inference_payload = feature_pipeline.run_on_server_inference(inference_payload, feature_pipeline.extra_info)
-    #         scaled_labeled_prices = inference_payload["y_pred_np"]
-    #         print("the difference:", scaled_pred_prices,scaled_labeled_prices)
 
     with torch.no_grad(): # Disable gradient computation
         for batch in inference_loader:
