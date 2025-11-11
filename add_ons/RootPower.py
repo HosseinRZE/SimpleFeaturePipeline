@@ -217,7 +217,7 @@ class RootPowerMapperAddOn(BaseAddOn):
             self.add_trace_print(pipeline_extra_info, f"Successfully applied transformation to {len(samples)} samples. M={M:.4f}, b={self.b:.4f}")
 
     # --- PIPELINE INVERSE HOOKS ---
-
+    @priority(3)
     def on_evaluation(self, eval_data: Dict[str, Any], pipeline_extra_info: Dict[str, Any]) -> Dict[str, Any]:
         M = pipeline_extra_info.get(M_KEY)
         B = pipeline_extra_info.get(B_KEY)
@@ -238,7 +238,7 @@ class RootPowerMapperAddOn(BaseAddOn):
         if f_x_labels is not None and f_x_labels.size > 0:
             eval_data["all_labels_reg"] = self._inverse_transform(f_x_labels, M, B)
         return eval_data
-
+    @priority(3)
     def on_server_inference(self, state: Dict[str, Any], pipeline_extra_info: Dict[str, Any]) -> Dict[str, Any]:
         M = pipeline_extra_info.get(M_KEY)
         B = pipeline_extra_info.get(B_KEY)

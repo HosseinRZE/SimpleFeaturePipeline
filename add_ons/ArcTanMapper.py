@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, List, Tuple
+from utils.decorators.priority import priority
 
 # Assuming these imports exist in your environment
 from add_ons.base_addon import BaseAddOn 
@@ -38,10 +39,10 @@ class ArctanMapperAddOn(BaseAddOn):
             **feature_config (List[str]): Configuration mapping feature groups to column lists.
                 Example: ArctanMapperAddOn(a=10, y=True, main=['col1', 'col2'], aux=['col3'])
         """
+        super().__init__()
         self.A = a
         self.b = b
         self.y = y # Use the explicit 'y' argument
-        self.on_evaluation_priority = 1
         
         # 'feature_config' (from **kwargs) now *only* contains the feature mapping
         # e.g., {'main': ['col1', 'col2'], 'aux': ['col3']}
@@ -184,7 +185,8 @@ class ArctanMapperAddOn(BaseAddOn):
         
         self.add_trace_print(pipeline_extra_info, f"Successfully applied Arctan transform to {len(samples)} samples.")
         return state
-
+    
+    @priority(2)
     def on_evaluation(self, eval_data: Dict[str, Any], pipeline_extra_info: Dict[str, Any]) -> Dict[str, Any]:
         """
         Applies the inverse transformation to predictions and labels.
@@ -215,7 +217,8 @@ class ArctanMapperAddOn(BaseAddOn):
             eval_data["all_labels_reg"] = self._inverse_transform(f_x_labels, A, B)
             
         return eval_data
-
+    
+    @priority(2)
     def on_server_inference(self, state: Dict[str, Any], pipeline_extra_info: Dict[str, Any]) -> Dict[str, Any]:
         """
         Applies the inverse transformation to the model predictions (y_pred_np).

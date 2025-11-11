@@ -4,6 +4,7 @@ from sklearn.model_selection import train_test_split
 from add_ons.base_addon import BaseAddOn
 from data_structure.sequence_collection import SequenceCollection
 from utils.build_multi_input_dataset import build_multiinput_dataset
+from utils.padd_list import padding_list
 import torch
 
 class PrepareOutputAddOn(BaseAddOn):
@@ -58,7 +59,6 @@ class PrepareOutputAddOn(BaseAddOn):
             
         return filtered_list
 
-
     def on_final_output(
             self,
             state: Dict[str, Any],
@@ -108,14 +108,12 @@ class PrepareOutputAddOn(BaseAddOn):
         X_list = [s.X for s in samples]
         y_list = [s.y for s in samples]
         x_lengths_list = [s.x_lengths for s in samples]
-        
         # --- 1. Extract and Filter the metadata list ---
         raw_metadata_list = [s.metadata for s in samples]
         # Filter the full list based on required keys (e.g., ['mask', 'asset_id'])
         metadata_list = self._filter_metadata(raw_metadata_list, self.metadata_keys)
         # ----------------------------------------------
-        
-        y_padded = np.array(y_list, dtype=np.float32)
+        y_padded, max_len_y = padding_list(y_list)
 
         if not for_torch:
             # NumPy / scikit-learn format (single flattened array)

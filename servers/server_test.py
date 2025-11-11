@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from utils.padding_batch_reg import collate_batch
 # Import necessary classes
 # Note: LSTMKernelAttentionLSTMMultiRegressor needs to be importable
-from models.neural_nets.vanilla_fnn import VanillaFNN
+from models.neural_nets.cnn_lstm_attention import CNNAttentionLSTMMultiRegressor
 # Assuming the updated FeaturePipeline class and DataStoreMock are available
 # Replace 'ServerPreprocess' import with 'DataStoreMock'
 from servers.pre_process.data_store_mock import DataStoreMock # Assuming DataStoreMock is in a separate file or defined above
@@ -21,9 +21,9 @@ from servers.pre_process.data_store_mock import DataStoreMock # Assuming DataSto
 app = Flask(__name__)
 
 # ---------------- Load model and meta ----------------
-meta_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251109_174113/meta_train_model_20251109_174113.pkl")
-state_files = glob.glob("/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251109_174113/model_train_model_20251109_174113.ckpt")
-pipeline_path = "/home/iatell/projects/meta-learning/experiments/fnn_train_model_20251109_174113/pipeline_train_model_20251109_174113.pkl"
+meta_files = glob.glob("/home/iatell/projects/meta-learning/experiments/CnnLstmAttention_train_model_20251111_135901/meta_train_model_20251111_135901.pkl")
+state_files = glob.glob("/home/iatell/projects/meta-learning/experiments/CnnLstmAttention_train_model_20251111_135901/model_train_model_20251111_135901.ckpt")
+pipeline_path = "/home/iatell/projects/meta-learning/experiments/CnnLstmAttention_train_model_20251111_135901/pipeline_train_model_20251111_135901.pkl"
 
 # Pick the newest (last modified)
 meta_path = max(meta_files, key=os.path.getmtime)
@@ -32,7 +32,7 @@ print("Using latest meta file:", meta_path)
 meta = joblib.load(meta_path)
 
 # Load the model
-model = VanillaFNN.load_from_checkpoint(state_path)
+model = CNNAttentionLSTMMultiRegressor.load_from_checkpoint(state_path)
 model.eval()
 
 # ---------------- Load raw data ----------------
@@ -155,7 +155,7 @@ def predict():
             # lengths_batch = {k: v.to(device) for k, v in lengths_batch.items()}
             # model.to(device)
             # 4. Call your model
-            predictions = model(X_batch, lengths_batch)
+            predictions = model(X_batch, lengths_batch["main"])
 
             predictions_list.append(predictions)
 # Check if the list is empty before concatenation (good practice)
