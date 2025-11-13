@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2-Candle Volume Profile</title>
+    <!-- Load TradingView Lightweight Charts with specific version -->
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        /* Use Inter font and a clean, modern theme */
+        body {
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+            background-color: #f8fafc;
+            color: #1e293b;
+            margin: 0;
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+            color: #0f172a;
+            font-weight: 600;
+            margin-bottom: 30px;
+        }
+
+        /* Container for the file uploader */
+        .upload-container {
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 20px;
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
+            border: 2px dashed #cbd5e1;
+            transition: border-color 0.3s ease;
+        }
+
+        .upload-container:hover {
+            border-color: #94a3b8;
+        }
+
+        .upload-container label {
+            font-weight: 500;
+            color: #334155;
+            margin-right: 10px;
+            display: block;
+            margin-bottom: 10px;
+        }
+
+        input[type="file"] {
+            font-family: inherit;
+            font-size: 0.9rem;
+            margin: 10px 0;
+        }
+
+        /* Style the file input button (browser-specific) */
+        input[type="file"]::file-selector-button {
+            font-family: inherit;
+            font-weight: 500;
+            padding: 10px 16px;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            background-color: #f8fafc;
+            color: #334155;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        input[type="file"]::file-selector-button:hover {
+            background-color: #f1f5f9;
+            border-color: #94a3b8;
+        }
+
+        /* Main app container uses flex for side-by-side layout */
+        #app-container {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 1600px;
+            margin: 20px auto;
+            background: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            overflow: hidden;
+        }
+
+        /* Wrapper for the chart + status */
+        #chart-wrapper {
+            flex: 3;
+            position: relative;
+            min-height: 500px;
+        }
+
+        /* Chart container itself */
+        #chart-container {
+            width: 100%;
+            height: 600px;
+        }
+
+        /* Status message for user feedback */
+        #status-message {
+            text-align: center;
+            padding: 12px;
+            font-size: 1rem;
+            font-weight: 500;
+            background: #f1f5f9;
+            color: #475569;
+            border-top: 1px solid #e2e8f0;
+            min-height: 20px;
+        }
+
+        /* Profile container on the right */
+        #profile-container {
+            flex: 1;
+            padding: 20px;
+            border-left: 1px solid #e2e8f0;
+            background: #fdfdfe;
+            overflow-y: auto;
+            min-height: 300px;
+        }
+
+        #profile-container h3 {
+            margin-top: 0;
+            text-align: center;
+            color: #334155;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+
+        /* Styling for each profile row */
+        .profile-bar-container {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 0.9em;
+            transition: background-color 0.2s ease;
+            padding: 4px 8px;
+            border-radius: 6px;
+        }
+
+        .profile-bar-container:hover {
+            background-color: #f8fafc;
+        }
+
+        .profile-label {
+            flex-basis: 150px;
+            flex-shrink: 0;
+            font-family: 'Courier New', monospace;
+            color: #64748b;
+            font-size: 0.85em;
+        }
+
+        .profile-bar-visual-wrapper {
+            flex-grow: 1;
+            margin-right: 12px;
+            background: #e2e8f0;
+            border-radius: 4px;
+            overflow: hidden;
+            height: 24px;
+        }
+
+        .profile-bar {
+            height: 100%;
+            background-color: #94a3b8;
+            border-radius: 4px;
+            transition: width 0.5s ease;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 8px;
+            color: white;
+            font-size: 0.8em;
+            font-weight: 500;
+        }
+
+        .profile-volume {
+            flex-basis: 40px;
+            flex-shrink: 0;
+            font-weight: 600;
+            color: #1e293b;
+            text-align: right;
+            font-size: 0.9em;
+        }
+
+        /* Special styling for the Point of Control (POC) */
+        .poc .profile-bar {
+            background-color: #f59e0b;
+        }
+        .poc .profile-label {
+            font-weight: 700;
+            color: #1e293b;
+        }
+        .poc .profile-volume {
+            color: #f59e0b;
+        }
+
+        /* Loading spinner */
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Error message styling */
+        .error-message {
+            color: #dc2626;
+            background-color: #fef2f2;
+            border: 1px solid #fecaca;
+            padding: 10px;
+            border-radius: 6px;
+            margin: 10px 0;
+        }
+
+        /* Success message styling */
+        .success-message {
+            color: #059669;
+            background-color: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            padding: 10px;
+            border-radius: 6px;
+            margin: 10px 0;
+        }
+
+        /* Responsive layout for tablets and smaller */
+        @media (min-width: 768px) {
+            #app-container {
+                flex-direction: row;
+            }
+            #chart-wrapper {
+                border-right: 1px solid #e2e8f0;
+            }
+            #status-message {
+                border-top: 1px solid #e2e8f0;
+                border-right: 1px solid #e2e8f0;
+            }
+            #profile-container {
+                border-left: none;
+                height: 600px;
+            }
+        }
+
+        @media (max-width: 767px) {
+            body {
+                padding: 10px;
+            }
+            
+            h1 {
+                font-size: 1.5rem;
+                margin-bottom: 20px;
+            }
+            
+            #chart-container {
+                height: 400px;
+            }
+            
+            #profile-container {
+                min-height: 200px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>2-Candle Custom Volume Profile</h1>
+
+    <div class="upload-container">
+        <label for="csv-uploader">📁 Upload your CSV file (format: timestamp, open, high, low, close, volume)</label>
+        <input type="file" id="csv-uploader" accept=".csv">
+        <div id="upload-status" style="margin-top: 10px; font-size: 0.9em;"></div>
+    </div>
+
+    <div id="app-container">
+        <div id="chart-wrapper">
+            <div id="chart-container"></div>
+            <div id="status-message">Please upload a CSV file to begin.</div>
+        </div>
+        <div id="profile-container">
+            <h3>Custom Volume Profile</h3>
+            <div id="profile-instructions">
+                <p style="text-align: center; color: #64748b; margin: 20px 0;">
+                    📊 Click two candles on the chart to generate a volume profile.
+                </p>
+                <div style="background: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0; font-size: 0.9em;">
+                    <strong>How it works:</strong><br>
+                    • Each candle contributes 1 volume to overlapping price ranges<br>
+                    • The POC (Point of Control) is the range with highest volume<br>
+                    • Buckets are created from unique price points between the two candles
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let chart;
+        let candlestickSeries;
+        let volumeSeries;
+        let selectedCandles = [];
+        let selectedMarkers = [];
+        let allCandleData = [];
+        
+        const chartContainer = document.getElementById('chart-container');
+        const statusDiv = document.getElementById('status-message');
+        const profileDiv = document.getElementById('profile-container');
+        const uploadStatus = document.getElementById('upload-status');
+
+        // Initialize chart
+        function initializeChart() {
+            try {
+                chart = LightweightCharts.createChart(chartContainer, {
+                    width: chartContainer.clientWidth,
+                    height: chartContainer.clientHeight,
+                    layout: {
+                        background: { type: 'solid', color: '#ffffff' },
+                        textColor: '#1e293b',
+                    },
+                    grid: {
+                        vertLines: {
+                            color: '#e2e8f0',
+                        },
+                        horzLines: {
+                            color: '#e2e8f0',
+                        },
+                    },
+                    crosshair: {
+                        mode: LightweightCharts.CrosshairMode.Normal,
+                    },
+                    rightPriceScale: {
+                        borderColor: '#e2e8f0',
+                    },
+                    timeScale: {
+                        borderColor: '#e2e8f0',
+                        timeVisible: true,
+                        secondsVisible: false,
+                    }
+                });
+
+                // Handle window resize
+                window.addEventListener('resize', () => {
+                    if (chart) {
+                        chart.applyOptions({
+                            width: chartContainer.clientWidth,
+                            height: chartContainer.clientHeight
+                        });
+                    }
+                });
+                
+                console.log('Chart initialized successfully');
+                return true;
+            } catch (error) {
+                console.error('Error initializing chart:', error);
+                statusDiv.textContent = 'Error initializing chart. Please refresh the page.';
+                return false;
+            }
+        }
+
+        // File upload handler
+        document.getElementById('csv-uploader').addEventListener('change', handleFileUpload);
+
+        async function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) {
+                showUploadStatus('No file selected.', 'error');
+                return;
+            }
+
+            showUploadStatus('Uploading and processing file...', 'loading');
+            statusDiv.innerHTML = 'Processing CSV file... <span class="loading"></span>';
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/upload_csv', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showUploadStatus('File uploaded successfully!', 'success');
+                    statusDiv.textContent = 'Chart loaded. Click the first candle to analyze.';
+                    
+                    // Store data and setup chart
+                    allCandleData = result.data.ohlc;
+                    setupChart(result.data);
+                } else {
+                    showUploadStatus(`Error: ${result.error}`, 'error');
+                    statusDiv.textContent = `Error: ${result.error}`;
+                }
+            } catch (error) {
+                console.error('Upload error:', error);
+                showUploadStatus('Network error during upload', 'error');
+                statusDiv.textContent = 'Network error during upload';
+            }
+        }
+
+        function showUploadStatus(message, type) {
+            uploadStatus.innerHTML = message;
+            uploadStatus.className = type === 'error' ? 'error-message' : 
+                                   type === 'success' ? 'success-message' : '';
+        }
+
+        function setupChart(data) {
+            try {
+                // Clear existing series
+                if (candlestickSeries) {
+                    chart.removeSeries(candlestickSeries);
+                }
+                if (volumeSeries) {
+                    chart.removeSeries(volumeSeries);
+                }
+
+                console.log('Setting up chart with data:', data.ohlc.length, 'candles');
+
+                // Add Candlestick Series
+                candlestickSeries = chart.addCandlestickSeries({
+                    upColor: '#22c55e',
+                    downColor: '#ef4444',
+                    borderDownColor: '#ef4444',
+                    borderUpColor: '#22c55e',
+                    wickDownColor: '#ef4444',
+                    wickUpColor: '#22c55e',
+                });
+                candlestickSeries.setData(data.ohlc);
+
+                // Add Volume Series
+                volumeSeries = chart.addHistogramSeries({
+                    color: '#94a3b8',
+                    priceFormat: {
+                        type: 'volume',
+                    },
+                    priceScaleId: '',
+                });
+                volumeSeries.setData(data.volume);
+
+                // Configure price scales
+                chart.priceScale('').applyOptions({
+                    scaleMargins: {
+                        top: 0.85,
+                        bottom: 0,
+                    },
+                });
+
+                // Fit content to view
+                chart.timeScale().fitContent();
+
+                // Setup click handler
+                setupClickHandler();
+                
+                console.log('Chart setup completed successfully');
+            } catch (error) {
+                console.error('Error setting up chart:', error);
+                statusDiv.textContent = 'Error setting up chart. Please check the console for details.';
+            }
+        }
+
+        function setupClickHandler() {
+            chart.subscribeClick(param => {
+                if (!param.time) return;
+
+                const candle = allCandleData.find(c => c.time === param.time);
+                if (!candle) return;
+
+                handleCandleSelection(candle);
+            });
+        }
+
+        function handleCandleSelection(candle) {
+            if (selectedCandles.length === 0) {
+                // First candle selected
+                selectedCandles = [candle];
+                selectedMarkers = [{
+                    time: candle.time,
+                    position: 'aboveBar',
+                    color: '#2563eb',
+                    shape: 'arrowDown',
+                    text: 'Selected 1'
+                }];
+                statusDiv.textContent = 'First candle selected. Click the second candle.';
+                
+            } else if (selectedCandles.length === 1) {
+                // Second candle selected
+                if (candle.time === selectedCandles[0].time) {
+                    return; // Avoid selecting same candle
+                }
+
+                selectedCandles.push(candle);
+                selectedMarkers.push({
+                    time: candle.time,
+                    position: 'aboveBar',
+                    color: '#f59e0b',
+                    shape: 'arrowDown',
+                    text: 'Selected 2'
+                });
+
+                statusDiv.innerHTML = 'Calculating profile... <span class="loading"></span>';
+                
+                // Calculate and display profile
+                calculateAndDisplayProfile(selectedCandles[0], selectedCandles[1]);
+            }
+
+            // Update markers
+            candlestickSeries.setMarkers(selectedMarkers);
+        }
+
+        async function calculateAndDisplayProfile(candle1, candle2) {
+            try {
+                const response = await fetch('/calculate_profile', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        candle1: candle1,
+                        candle2: candle2
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    displayProfile(result.buckets, result.maxVolume, candle1, candle2);
+                    
+                    const date1 = new Date(candle1.time * 1000).toLocaleDateString();
+                    const date2 = new Date(candle2.time * 1000).toLocaleDateString();
+                    statusDiv.textContent = `Profile for ${date1} & ${date2}`;
+                    
+                    // Reset selection after delay
+                    setTimeout(() => {
+                        selectedCandles = [];
+                        selectedMarkers = [];
+                        candlestickSeries.setMarkers([]);
+                        statusDiv.textContent = `Profile calculated. Click first candle to start new analysis.`;
+                    }, 2000);
+                } else {
+                    statusDiv.textContent = `Error: ${result.error}`;
+                }
+            } catch (error) {
+                console.error('Profile calculation error:', error);
+                statusDiv.textContent = 'Error calculating profile';
+            }
+        }
+
+        function displayProfile(buckets, maxVolume, candle1, candle2) {
+            profileDiv.innerHTML = '<h3>Custom Volume Profile</h3>';
+            
+            // Add summary info
+            const summaryDiv = document.createElement('div');
+            summaryDiv.style.cssText = 'background: #f8fafc; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 0.9em;';
+            
+            const date1 = new Date(candle1.time * 1000).toLocaleDateString();
+            const date2 = new Date(candle2.time * 1000).toLocaleDateString();
+            
+            summaryDiv.innerHTML = `
+                <strong>Analysis Period:</strong><br>
+                📅 ${date1}<br>
+                📅 ${date2}<br>
+                <strong>Total Buckets:</strong> ${buckets.length}<br>
+                <strong>Max Volume:</strong> ${maxVolume}
+            `;
+            profileDiv.appendChild(summaryDiv);
+
+            // Display buckets
+            for (const bucket of buckets) {
+                const barContainer = document.createElement('div');
+                barContainer.className = 'profile-bar-container';
+                if (bucket.isPoc) {
+                    barContainer.classList.add('poc');
+                }
+
+                const label = document.createElement('span');
+                label.className = 'profile-label';
+                label.textContent = `${bucket.start.toFixed(2)} - ${bucket.end.toFixed(2)}`;
+                
+                const barWrapper = document.createElement('div');
+                barWrapper.className = 'profile-bar-visual-wrapper';
+                
+                const barVisual = document.createElement('div');
+                barVisual.className = 'profile-bar';
+                const widthPercent = maxVolume > 0 ? (bucket.volume / maxVolume) * 100 : 0;
+                barVisual.style.width = `${widthPercent}%`;
+                barVisual.textContent = bucket.volume > 0 ? bucket.volume : '';
+                
+                const volumeText = document.createElement('span');
+                volumeText.className = 'profile-volume';
+                volumeText.textContent = bucket.volume;
+
+                barWrapper.appendChild(barVisual);
+                barContainer.appendChild(label);
+                barContainer.appendChild(barWrapper);
+                barContainer.appendChild(volumeText);
+                profileDiv.appendChild(barContainer);
+            }
+        }
+
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('DOM loaded, initializing chart...');
+            if (initializeChart()) {
+                console.log('Application initialized successfully');
+            } else {
+                console.error('Failed to initialize application');
+            }
+        });
+    </script>
+</body>
+</html>
