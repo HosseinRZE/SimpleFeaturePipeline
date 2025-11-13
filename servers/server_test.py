@@ -21,9 +21,9 @@ from servers.pre_process.data_store_mock import DataStoreMock # Assuming DataSto
 app = Flask(__name__)
 
 # ---------------- Load model and meta ----------------
-meta_files = glob.glob("/home/iatell/projects/meta-learning/experiments/CnnLstmAttention_train_model_20251111_135901/meta_train_model_20251111_135901.pkl")
-state_files = glob.glob("/home/iatell/projects/meta-learning/experiments/CnnLstmAttention_train_model_20251111_135901/model_train_model_20251111_135901.ckpt")
-pipeline_path = "/home/iatell/projects/meta-learning/experiments/CnnLstmAttention_train_model_20251111_135901/pipeline_train_model_20251111_135901.pkl"
+meta_files = glob.glob("/home/iatell/projects/meta-learning/experiments/CnnLstmAttention_train_model_20251112_140224/meta_train_model_20251112_140224.pkl")
+state_files = glob.glob("/home/iatell/projects/meta-learning/experiments/CnnLstmAttention_train_model_20251112_140224/model_train_model_20251112_140224.ckpt")
+pipeline_path = "/home/iatell/projects/meta-learning/experiments/CnnLstmAttention_train_model_20251112_140224/pipeline_train_model_20251112_140224.pkl"
 
 # Pick the newest (last modified)
 meta_path = max(meta_files, key=os.path.getmtime)

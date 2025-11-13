@@ -5,7 +5,7 @@ from preprocess.preprocess_final import preprocess_pipeline
 from utils.padding_batch_reg import collate_batch
 from feature_pipeline.feature_pipeline_base import FeaturePipeline
 from utils.generate_name import generate_filenames
-from models.neural_nets.cnn_lstm_attention import CNNAttentionLSTMMultiRegressor
+from models.neural_nets.lstm_attention import LSTMAttentionSetRegressor
 from models.evaluation.multi_regression import evaluate_model
 from models.utils.early_stopping import get_early_stopping_callbacks
 from utils.run_debug_mode import run_debug_mode
@@ -42,18 +42,12 @@ def train_model(
     num_layers=1,
     attention_name = "tanh_attention",
     optimizer_name= "adamw",
-    kernels = [3],
-    cnn_out_channels =16,
-    first_drop = 0.4,
-    second_drop = 0.4,
-    third_drop= 0.4,
+    first_drop = 0.3,
     scheduler_name = "reduce_on_plateau",
     optimizer_params={"weight_decay": 0.01},
     scheduler_params={"factor": 0.2, "patience": 5},
-    activation_function = "relu",
     use_mse_loss = False,
-    use_rescue = False,
-    activation_functions = ["relu"]
+    bidirectional = False
 ):
     # 2. Create the pipeline and add your modules
     feature_pipeline = FeaturePipeline(
@@ -114,28 +108,21 @@ def train_model(
     # max_len_y = 5
     max_len_y = returned_state["max_len_y"]
     feature_columns = returned_state["feature_columns"]
-    model = CNNAttentionLSTMMultiRegressor(
+    model = LSTMAttentionSetRegressor(
         input_dim=input_dim,
         hidden_dim=hidden_dim,
-        output_dim=max_len_y,
+        num_layers=num_layers,
+        max_len_y=max_len_y,
         lr=lr,
-        num_layers = num_layers,
         attention_name = attention_name,
         optimizer_name= optimizer_name,
-        kernels = kernels,
-        cnn_out_channels =cnn_out_channels,
         first_drop = first_drop,
-        second_drop = second_drop,
-        third_drop = third_drop,
         scheduler_name = scheduler_name,
         optimizer_params= optimizer_params,
-        scheduler_params= scheduler_params,
-        use_mse_loss = use_mse_loss,
-        # activation_functions = activation_functions,
-        # use_rescue = use_rescue
+        bidirectional = bidirectional
     )
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_batch)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_batch)
     val_loader = DataLoader(val_ds, batch_size=batch_size, collate_fn=collate_batch) if val_ds else None
     if early_stop:
         # Define the output directory for this specific experiment/model
@@ -184,22 +171,14 @@ if __name__ == "__main__":
         do_validation=True,
         test_mode = False,
         max_epochs=200,
-        hidden_dim=15,
-        kernels = [3,7],
-        cnn_out_channels =10,
-        first_drop = 0.4,
-        second_drop = 0.4,
-        third_drop= 0.4,
+        hidden_dim=50,
         lr=0.001,
-        batch_size=20,
+        batch_size=30,
         optimizer_name= "adam",
         scheduler_name = None,
-        # optimizer_params={},
-        # scheduler_params={},
+        optimizer_params={},
+        scheduler_params={},
         save_model= True,
         use_mse_loss = False,
-        use_rescue = False,
-       activation_functions=["elu", 
-                            #  "elu", "dropout(0.1)", "elu"
-                             ] #"leaky_relu" "sigmoid" "tanh"  "elu" "relu" "swish" "mish"
+
     )
