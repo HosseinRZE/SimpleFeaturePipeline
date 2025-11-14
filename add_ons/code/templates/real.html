@@ -4,10 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>2-Candle Volume Profile</title>
-    <!-- Load TradingView Lightweight Charts with specific version -->
     <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
     <style>
-        /* Use Inter font and a clean, modern theme */
         body {
             font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
             background-color: #f8fafc;
@@ -23,7 +21,6 @@
             margin-bottom: 30px;
         }
 
-        /* Container for the file uploader */
         .upload-container {
             text-align: center;
             margin-bottom: 20px;
@@ -56,7 +53,6 @@
             margin: 10px 0;
         }
 
-        /* Style the file input button (browser-specific) */
         input[type="file"]::file-selector-button {
             font-family: inherit;
             font-weight: 500;
@@ -74,7 +70,6 @@
             border-color: #94a3b8;
         }
 
-        /* Main app container uses flex for side-by-side layout */
         #app-container {
             display: flex;
             flex-direction: column;
@@ -87,20 +82,28 @@
             overflow: hidden;
         }
 
-        /* Wrapper for the chart + status */
         #chart-wrapper {
             flex: 3;
             position: relative;
             min-height: 500px;
         }
 
-        /* Chart container itself */
         #chart-container {
             width: 100%;
             height: 600px;
         }
+        
+        /* --- NEW --- CSS for the overlay canvas */
+        #profile-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none; /* Allows clicks to pass through to the chart */
+            z-index: 10; /* Draws on top of the chart series */
+        }
+        /* --- END NEW --- */
 
-        /* Status message for user feedback */
+
         #status-message {
             text-align: center;
             padding: 12px;
@@ -112,7 +115,6 @@
             min-height: 20px;
         }
 
-        /* Profile container on the right */
         #profile-container {
             flex: 1;
             padding: 20px;
@@ -131,7 +133,6 @@
             margin-bottom: 20px;
         }
 
-        /* Styling for each profile row */
         .profile-bar-container {
             display: flex;
             align-items: center;
@@ -186,7 +187,6 @@
             font-size: 0.9em;
         }
 
-        /* Special styling for the Point of Control (POC) */
         .poc .profile-bar {
             background-color: #f59e0b;
         }
@@ -198,7 +198,6 @@
             color: #f59e0b;
         }
 
-        /* Loading spinner */
         .loading {
             display: inline-block;
             width: 20px;
@@ -215,7 +214,6 @@
             100% { transform: rotate(360deg); }
         }
 
-        /* Error message styling */
         .error-message {
             color: #dc2626;
             background-color: #fef2f2;
@@ -225,7 +223,6 @@
             margin: 10px 0;
         }
 
-        /* Success message styling */
         .success-message {
             color: #059669;
             background-color: #f0fdf4;
@@ -235,7 +232,6 @@
             margin: 10px 0;
         }
 
-        /* Responsive layout for tablets and smaller */
         @media (min-width: 768px) {
             #app-container {
                 flex-direction: row;
@@ -285,6 +281,7 @@
     <div id="app-container">
         <div id="chart-wrapper">
             <div id="chart-container"></div>
+            <canvas id="profile-canvas"></canvas>
             <div id="status-message">Please upload a CSV file to begin.</div>
         </div>
         <div id="profile-container">
@@ -295,9 +292,10 @@
                 </p>
                 <div style="background: #f8fafc; padding: 15px; border-radius: 8px; margin: 20px 0; font-size: 0.9em;">
                     <strong>How it works:</strong><br>
-                    • Each candle contributes 1 volume to overlapping price ranges<br>
-                    • The POC (Point of Control) is the range with highest volume<br>
-                    • Buckets are created from unique price points between the two candles
+                    • Extracts all OHLC prices from selected candles and sorts them<br>
+                    • Creates buckets between consecutive sorted prices<br>
+                    • Counts how many times each bucket is touched by candle ranges<br>
+                    • POC (Point of Control) = bucket touched most frequently
                 </div>
             </div>
         </div>
@@ -311,11 +309,90 @@
         let selectedCandles = [];
         let selectedMarkers = [];
         let allCandleData = [];
+
+        // --- NEW --- Globals for the canvas overlay
+        let profileCanvas;
+        let profileCanvasCtx;
+        let currentProfileData = null; // Stores buckets, maxVol, etc.
+        const pocColor = 'rgba(255, 82, 82, 0.5)'; // Red with 50% opacity
+        const barColor = 'rgba(245, 159, 11, 0.5)'; // Yellow/Amber with 50% opacity
+        // --- END NEW ---
         
+        const chartWrapper = document.getElementById('chart-wrapper'); // --- NEW ---
         const chartContainer = document.getElementById('chart-container');
         const statusDiv = document.getElementById('status-message');
         const profileDiv = document.getElementById('profile-container');
         const uploadStatus = document.getElementById('upload-status');
+
+        // --- NEW --- Resize the overlay canvas to match the chart
+        function resizeProfileCanvas() {
+            if (profileCanvas) {
+                profileCanvas.width = chartContainer.clientWidth;
+                profileCanvas.height = chartContainer.clientHeight;
+            }
+        }
+
+        // --- NEW --- Clear the overlay canvas
+        function clearProfileCanvas() {
+            if (profileCanvasCtx) {
+                profileCanvasCtx.clearRect(0, 0, profileCanvas.width, profileCanvas.height);
+            }
+        }
+
+        // --- NEW --- The main drawing function
+        function drawProfileOnCanvas() {
+            // 1. Check if we have data and a context
+            if (!profileCanvasCtx || !currentProfileData || !chart || !candlestickSeries) {
+                return;
+            }
+
+            // 2. Clear canvas for redraw
+            clearProfileCanvas();
+
+            const { buckets, maxVolume, startTime, endTime } = currentProfileData;
+            
+            // 3. Get coordinate converters
+            const timeScale = chart.timeScale();
+            const priceScale = candlestickSeries.priceScale();
+
+            // 4. Get X-coordinates (time) for the profile's position
+            const startX = timeScale.timeToCoordinate(startTime);
+            const endX = timeScale.timeToCoordinate(endTime);
+            
+            // If range is off-screen, don't draw
+            if (startX === null || endX === null) {
+                return;
+            }
+            
+            // Anchor the profile in the middle of the selected time range
+            const profileAnchorX = (startX + endX) / 2; 
+            // Max bar width is 70% of the selected time range's width in pixels
+            const profileMaxWidth = Math.abs(endX - startX) * 0.7; 
+
+            // 5. Loop and draw buckets
+            for (const bucket of buckets) {
+                // Get Y-coordinates (price)
+                const yStart = priceScale.priceToCoordinate(bucket.end); // 'end' is higher price, so top Y
+                const yEnd = priceAscale.priceToCoordinate(bucket.start); // 'start' is lower price, so bottom Y
+
+                // If bucket is off-screen vertically, skip it
+                if (yStart === null || yEnd === null) {
+                    continue;
+                }
+
+                const barHeight = yEnd - yStart;
+                if (barHeight < 1) continue; // Don't draw if less than 1 pixel
+
+                // Calculate bar width based on volume
+                const barWidth = (bucket.volume / maxVolume) * profileMaxWidth;
+
+                // Set color
+                profileCanvasCtx.fillStyle = bucket.isPoc ? pocColor : barColor;
+
+                // Draw the rectangle, anchoring from the middle and extending right
+                profileCanvasCtx.fillRect(profileAnchorX, yStart, barWidth, barHeight);
+            }
+        }
 
         // Initialize chart
         function initializeChart() {
@@ -328,19 +405,11 @@
                         textColor: '#1e293b',
                     },
                     grid: {
-                        vertLines: {
-                            color: '#e2e8f0',
-                        },
-                        horzLines: {
-                            color: '#e2e8f0',
-                        },
+                        vertLines: { color: '#e2e8f0' },
+                        horzLines: { color: '#e2e8f0' },
                     },
-                    crosshair: {
-                        mode: LightweightCharts.CrosshairMode.Normal,
-                    },
-                    rightPriceScale: {
-                        borderColor: '#e2e8f0',
-                    },
+                    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+                    rightPriceScale: { borderColor: '#e2e8f0' },
                     timeScale: {
                         borderColor: '#e2e8f0',
                         timeVisible: true,
@@ -348,13 +417,24 @@
                     }
                 });
 
+                // --- NEW --- Initialize the overlay canvas
+                profileCanvas = document.getElementById('profile-canvas');
+                profileCanvasCtx = profileCanvas.getContext('2d');
+                resizeProfileCanvas(); // Set initial size
+                // --- END NEW ---
+
                 // Handle window resize
                 window.addEventListener('resize', () => {
                     if (chart) {
+                        // Resize the chart
                         chart.applyOptions({
                             width: chartContainer.clientWidth,
                             height: chartContainer.clientHeight
                         });
+                        // --- NEW --- Resize canvas and redraw profile
+                        resizeProfileCanvas();
+                        drawProfileOnCanvas();
+                        // --- END NEW ---
                     }
                 });
                 
@@ -412,18 +492,19 @@
         function showUploadStatus(message, type) {
             uploadStatus.innerHTML = message;
             uploadStatus.className = type === 'error' ? 'error-message' : 
-                                   type === 'success' ? 'success-message' : '';
+                                     type === 'success' ? 'success-message' : '';
         }
 
         function setupChart(data) {
             try {
                 // Clear existing series
-                if (candlestickSeries) {
-                    chart.removeSeries(candlestickSeries);
-                }
-                if (volumeSeries) {
-                    chart.removeSeries(volumeSeries);
-                }
+                if (candlestickSeries) chart.removeSeries(candlestickSeries);
+                if (volumeSeries) chart.removeSeries(volumeSeries);
+                
+                // --- NEW --- Clear canvas and profile data on new file upload
+                currentProfileData = null;
+                clearProfileCanvas();
+                // --- END NEW ---
 
                 console.log('Setting up chart with data:', data.ohlc.length, 'candles');
 
@@ -441,19 +522,14 @@
                 // Add Volume Series
                 volumeSeries = chart.addHistogramSeries({
                     color: '#94a3b8',
-                    priceFormat: {
-                        type: 'volume',
-                    },
+                    priceFormat: { type: 'volume' },
                     priceScaleId: '',
                 });
                 volumeSeries.setData(data.volume);
 
                 // Configure price scales
                 chart.priceScale('').applyOptions({
-                    scaleMargins: {
-                        top: 0.85,
-                        bottom: 0,
-                    },
+                    scaleMargins: { top: 0.85, bottom: 0 },
                 });
 
                 // Fit content to view
@@ -461,6 +537,15 @@
 
                 // Setup click handler
                 setupClickHandler();
+
+                // --- NEW --- Subscribe to chart movements to redraw the profile
+                chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+                    drawProfileOnCanvas();
+                });
+                candlestickSeries.priceScale().subscribeVisiblePriceRangeChange(() => {
+                    drawProfileOnCanvas();
+                });
+                // --- END NEW ---
                 
                 console.log('Chart setup completed successfully');
             } catch (error) {
@@ -483,6 +568,12 @@
         function handleCandleSelection(candle) {
             if (selectedCandles.length === 0) {
                 // First candle selected
+                
+                // --- NEW --- Clear any old profile from canvas
+                currentProfileData = null;
+                clearProfileCanvas();
+                // --- END NEW ---
+
                 selectedCandles = [candle];
                 selectedMarkers = [{
                     time: candle.time,
@@ -522,19 +613,27 @@
             try {
                 const response = await fetch('/calculate_profile', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        candle1: candle1,
-                        candle2: candle2
+                        candles: [candle1, candle2]
                     })
                 });
 
                 const result = await response.json();
 
                 if (result.success) {
-                    displayProfile(result.buckets, result.maxVolume, candle1, candle2);
+                    // Display in the side panel (original behavior)
+                    displayProfile(result.buckets, result.maxVolume, candle1, candle2, result.totalCandles);
+                    
+                    // --- NEW --- Store data and draw on canvas
+                    currentProfileData = {
+                        buckets: result.buckets,
+                        maxVolume: result.maxVolume,
+                        startTime: Math.min(candle1.time, candle2.time),
+                        endTime: Math.max(candle1.time, candle2.time)
+                    };
+                    drawProfileOnCanvas();
+                    // --- END NEW ---
                     
                     const date1 = new Date(candle1.time * 1000).toLocaleDateString();
                     const date2 = new Date(candle2.time * 1000).toLocaleDateString();
@@ -545,6 +644,12 @@
                         selectedCandles = [];
                         selectedMarkers = [];
                         candlestickSeries.setMarkers([]);
+                        
+                        // --- NEW --- Clear canvas and profile data
+                        currentProfileData = null;
+                        clearProfileCanvas();
+                        // --- END NEW ---
+
                         statusDiv.textContent = `Profile calculated. Click first candle to start new analysis.`;
                     }, 2000);
                 } else {
@@ -556,7 +661,8 @@
             }
         }
 
-        function displayProfile(buckets, maxVolume, candle1, candle2) {
+        // This function remains unchanged, it populates the side panel
+        function displayProfile(buckets, maxVolume, candle1, candle2, totalCandles) {
             profileDiv.innerHTML = '<h3>Custom Volume Profile</h3>';
             
             // Add summary info
@@ -570,8 +676,9 @@
                 <strong>Analysis Period:</strong><br>
                 📅 ${date1}<br>
                 📅 ${date2}<br>
+                <strong>Total Candles:</strong> ${totalCandles}<br>
                 <strong>Total Buckets:</strong> ${buckets.length}<br>
-                <strong>Max Volume:</strong> ${maxVolume}
+                <strong>Max Volume:</strong> ${maxVolume} (times touched)
             `;
             profileDiv.appendChild(summaryDiv);
 

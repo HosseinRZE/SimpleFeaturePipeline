@@ -5,13 +5,17 @@ from datetime import datetime
 import json
 
 app = Flask(__name__)
+global_ohlc_data = []
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('real.html')
 
 @app.route('/upload_csv', methods=['POST'])
 def upload_csv():
+    # NEW: Access the global variable to modify it
+    global global_ohlc_data 
+    
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'No file provided'}), 400
@@ -72,6 +76,9 @@ def upload_csv():
                 'color': color
             })
         
+        # NEW: Store the complete OHLC data in our global variable
+        global_ohlc_data = ohlc_data
+        
         return jsonify({
             'success': True,
             'data': {
@@ -81,18 +88,45 @@ def upload_csv():
         })
         
     except Exception as e:
+        # NEW: Clear global data on error
+        global_ohlc_data = [] 
         return jsonify({'error': f'Error processing file: {str(e)}'}), 500
 
 @app.route('/calculate_profile', methods=['POST'])
 def calculate_profile():
+    # NEW: Access the global variable to read from it
+    global global_ohlc_data
+    
     try:
         data = request.json
-        candles = data.get('candles', [])
+        # NEW: Rename the variable to show it's just the range boundaries
+        boundary_candles = data.get('candles', []) 
         
-        if len(candles) < 2:
+        if len(boundary_candles) < 2:
             return jsonify({'error': 'At least 2 candles required'}), 400
+            
+        # NEW: Check if the global data is available
+        if not global_ohlc_data:
+            return jsonify({'error': 'No data uploaded. Please upload a CSV file first.'}), 400
+
+        # NEW: Get the start and end times from the two candles provided
+        start_time = boundary_candles[0]['time']
+        end_time = boundary_candles[-1]['time']
+
+        # NEW: Filter the *global* data to get ALL candles in the range
+        candles = [
+            candle for candle in global_ohlc_data
+            if start_time <= candle['time'] <= end_time
+        ]
+
+        # NEW: Validate the *filtered* list
+        if len(candles) < 2:
+            return jsonify({'error': 'Not enough candle data found in the selected time range.'}), 400
         
-        # NEW ALGORITHM:
+        # --- FROM HERE, THE REST OF THE ALGORITHM WORKS AS-IS ---
+        # It is now using the 'candles' variable, which contains the *full* set
+        # of candles in the range, not just the two boundaries.
+        
         # 1. Extract all OHLC prices from all candles
         # 2. Sort them ascending
         # 3. Create buckets between consecutive prices
@@ -151,7 +185,7 @@ def calculate_profile():
             'success': True,
             'buckets': buckets,
             'maxVolume': maxVolume,
-            'totalCandles': len(candles)
+            'totalCandles': len(candles) # This now correctly reports all candles
         })
         
     except Exception as e:
