@@ -25,6 +25,8 @@ from add_ons.ArcTanMapper import ArctanMapperAddOn
 from add_ons.pct_change import PctChangeMapperAddOn
 from add_ons.price_rate_change import PriceRateChange
 from add_ons.universal_scaler_add_on import ScalerMapperAddOn
+from add_ons.fixed_bucket_tpo import FixedBucketTPOProfileAddOn
+from add_ons.tpo import TPOProfileAddOn
 
 def train_model(
     data_csv,
@@ -55,6 +57,8 @@ def train_model(
             CandleShapeFeaturesAddOn(),
             CandleNormalizationAddOn(),
             PriceRateChange(),
+            TPOProfileAddOn(),
+            FixedBucketTPOProfileAddOn(num_buckets=30),
             # ScalerMapperAddOn(
             #     method="standard",
             #     y=True,
