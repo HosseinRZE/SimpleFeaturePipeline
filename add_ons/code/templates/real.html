@@ -307,7 +307,7 @@
         let candlestickSeries;
         let volumeSeries;
         let selectedCandles = [];
-        let selectedMarkers = [];
+        let seriesMarkers = [];
         let allCandleData = [];
 
         // --- NEW --- Globals for the canvas overlay
@@ -542,9 +542,6 @@
                 chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
                     drawProfileOnCanvas();
                 });
-                chart.priceScale().subscribeVisibleRangeChange(() => {
-                    drawProfileOnCanvas();
-                });
                 // --- END NEW ---
                 
                 console.log('Chart setup completed successfully');
@@ -575,7 +572,7 @@
                 // --- END NEW ---
 
                 selectedCandles = [candle];
-                selectedMarkers = [{
+                seriesMarkers = [{
                     time: candle.time,
                     position: 'aboveBar',
                     color: '#2563eb',
@@ -583,7 +580,7 @@
                     text: 'Selected 1'
                 }];
                 statusDiv.textContent = 'First candle selected. Click the second candle.';
-                
+
             } else if (selectedCandles.length === 1) {
                 // Second candle selected
                 if (candle.time === selectedCandles[0].time) {
@@ -591,7 +588,7 @@
                 }
 
                 selectedCandles.push(candle);
-                selectedMarkers.push({
+                seriesMarkers.push({
                     time: candle.time,
                     position: 'aboveBar',
                     color: '#f59e0b',
@@ -600,13 +597,13 @@
                 });
 
                 statusDiv.innerHTML = 'Calculating profile... <span class="loading"></span>';
-                
+
                 // Calculate and display profile
                 calculateAndDisplayProfile(selectedCandles[0], selectedCandles[1]);
             }
 
             // Update markers
-            candlestickSeries.setMarkers(selectedMarkers);
+            candlestickSeries.setMarkers(seriesMarkers);
         }
 
         async function calculateAndDisplayProfile(candle1, candle2) {
@@ -642,7 +639,7 @@
                     // Reset selection after delay
                     setTimeout(() => {
                         selectedCandles = [];
-                        selectedMarkers = [];
+                        seriesMarkers = [];
                         candlestickSeries.setMarkers([]);
                         
                         // --- NEW --- Clear canvas and profile data
