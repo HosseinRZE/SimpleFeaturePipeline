@@ -309,6 +309,7 @@
         let selectedCandles = [];
         let seriesMarkers = [];
         let allCandleData = [];
+        let markersPrimitive = null;
 
         // --- NEW --- Globals for the canvas overlay
         let profileCanvas;
@@ -504,6 +505,9 @@
                 // --- NEW --- Clear canvas and profile data on new file upload
                 currentProfileData = null;
                 clearProfileCanvas();
+                if (markersPrimitive) {
+                    markersPrimitive.setMarkers([]);
+                }
                 // --- END NEW ---
 
                 console.log('Setting up chart with data:', data.ohlc.length, 'candles');
@@ -518,6 +522,7 @@
                     wickUpColor: '#22c55e',
                 });
                 candlestickSeries.setData(data.ohlc);
+                markersPrimitive = LightweightCharts.createSeriesMarkers(candlestickSeries);
 
                 // Add Volume Series
                 volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
@@ -603,7 +608,7 @@
             }
 
             // Update markers
-            candlestickSeries.setMarkers(seriesMarkers);
+            markersPrimitive.setMarkers(seriesMarkers);
         }
 
         async function calculateAndDisplayProfile(candle1, candle2) {
@@ -640,7 +645,7 @@
                     setTimeout(() => {
                         selectedCandles = [];
                         seriesMarkers = [];
-                        candlestickSeries.setMarkers([]);
+                        markersPrimitive.setMarkers([]);
                         
                         // --- NEW --- Clear canvas and profile data
                         currentProfileData = null;
