@@ -309,7 +309,6 @@
         let selectedCandles = [];
         let seriesMarkers = [];
         let allCandleData = [];
-        let markersPrimitive = null;
 
         // --- NEW --- Globals for the canvas overlay
         let profileCanvas;
@@ -505,15 +504,12 @@
                 // --- NEW --- Clear canvas and profile data on new file upload
                 currentProfileData = null;
                 clearProfileCanvas();
-                if (markersPrimitive) {
-                    markersPrimitive.setMarkers([]);
-                }
                 // --- END NEW ---
 
                 console.log('Setting up chart with data:', data.ohlc.length, 'candles');
 
                 // Add Candlestick Series
-                candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+                candlestickSeries = chart.addCandlestickSeries({
                     upColor: '#22c55e',
                     downColor: '#ef4444',
                     borderDownColor: '#ef4444',
@@ -522,10 +518,9 @@
                     wickUpColor: '#22c55e',
                 });
                 candlestickSeries.setData(data.ohlc);
-                markersPrimitive = LightweightCharts.createSeriesMarkers(candlestickSeries);
 
                 // Add Volume Series
-                volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+                volumeSeries = chart.addHistogramSeries({
                     color: '#94a3b8',
                     priceFormat: { type: 'volume' },
                     priceScaleId: '',
@@ -608,7 +603,7 @@
             }
 
             // Update markers
-            markersPrimitive.setMarkers(seriesMarkers);
+            candlestickSeries.setMarkers(seriesMarkers);
         }
 
         async function calculateAndDisplayProfile(candle1, candle2) {
@@ -645,7 +640,7 @@
                     setTimeout(() => {
                         selectedCandles = [];
                         seriesMarkers = [];
-                        markersPrimitive.setMarkers([]);
+                        candlestickSeries.setMarkers([]);
                         
                         // --- NEW --- Clear canvas and profile data
                         currentProfileData = null;
