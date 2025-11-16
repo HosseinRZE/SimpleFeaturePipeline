@@ -8,30 +8,11 @@ from data_structure.sequence_sample import SequenceSample
 
 class PriceRateChange(BaseAddOn):
     """
-    Calculates simple price ratios (Current / Previous) for specified features
-    and adds them to the feature collection.
-    
-    Uses the 'seperatable' logic to determine where to store the new features.
-    
-    A value of 1.0 means no change.
-    
-    ### 💡 Example (relative_to='close'):
-    
-    | Time | close |
-    |------|-------|
-    | t-2  | 10.1  | <-- Prev Close: 10.1
-    | t-1  | 10.8  | <-- Prev Close: 10.8
-    | t    | 11.2  |
-    
-    Output 'close_ratio':
-    
-    | Time | close_ratio |
-    |------|-------------|
-    | t-2  | 1.0         | (First row)
-    | t-1  | 1.0693      | (10.8 / 10.1)
-    | t    | 1.0370      | (11.2 / 10.8)
+    Calculates simple price ratios (Current / Previous) using the FULL data 
+    (state['df_data']) to prevent per-window NaNs, and then slices the results 
+    into each sequence sample.
     """
-
+    
     def __init__(
         self, 
         feature_group_key: str = "main",
@@ -52,6 +33,7 @@ class PriceRateChange(BaseAddOn):
                          'close' (ratio to previous close).
             features_to_calculate: List of columns to apply ratio to.
         """
+        super().__init__()
         self.feature_group_key = feature_group_key
         self.seperatable = seperatable
         self.dict_name = dict_name
@@ -60,18 +42,9 @@ class PriceRateChange(BaseAddOn):
 
         if self.seperatable not in ("no", "complete", "both"):
             raise ValueError(f"Invalid seperatable value: {seperatable}. Must be 'no', 'complete', or 'both'.")
-
         if self.relative_to not in ["same", "close"]:
             raise ValueError("relative_to must be either 'same' or 'close'.")
         
-        # Check for required 'close' column if in 'close' mode
-        if self.relative_to == "close" and "close" not in self.features_to_calculate:
-             self.add_trace_print(None, "Warning: relative_to='close' but 'close' not in features_to_calculate. Adding 'close'.")
-             # Silently add 'close' as it's required for the calculation,
-             # but it will only be calculated if it was *also* in the original list.
-             # This check is more about *source* data.
-             pass # The check in _calculate_ratios is the important one.
-
         trace_msg = (
             f"PriceRateChange configured: Group='{self.feature_group_key}', Sep='{self.seperatable}', "
             f"Dict='{self.dict_name}', Relative='{self.relative_to}'"
@@ -79,87 +52,47 @@ class PriceRateChange(BaseAddOn):
         self.add_trace_print(None, trace_msg)
 
 
-    def _calculate_ratios(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _calculate_ratios_globally(self, full_df: pd.DataFrame, pipeline_extra_info: Dict[str, Any]) -> pd.DataFrame:
         """
-        Applies the core simple ratio calculation logic to a single DataFrame.
+        Applies the core simple ratio calculation logic to the full DataFrame.
         """
         
-        # Check for source columns needed for calculation
         required_cols = self.features_to_calculate.copy()
-        if self.relative_to == "close" and "close" not in required_cols:
-             # 'close' is needed as a denominator, even if not a target feature
-            required_cols.append("close") 
+        if self.relative_to == "close" and "close" not in full_df.columns:
+            # Check if 'close' is even available in the full dataset
+             raise ValueError("Relative to 'close' mode requires 'close' column in df_data.")
 
-        missing_cols = [col for col in required_cols if col not in df.columns]
+        missing_cols = [col for col in required_cols if col not in full_df.columns]
         if missing_cols:
-            raise ValueError(f"Source group DataFrame is missing required columns: {missing_cols}")
+            raise ValueError(f"Source DataFrame is missing required columns: {missing_cols}")
 
-        df_out = pd.DataFrame(index=df.index)
+        global_ratio_df = pd.DataFrame(index=full_df.index)
         
         if self.relative_to == "same":
             # Ratio relative to the same feature's previous value
             for col in self.features_to_calculate:
                 # Calculation: Current / Previous
-                df_out[f"{col}_ratio"] = df[col] / df[col].shift(1)
+                global_ratio_df[f"{col}_ratio"] = full_df[col] / full_df[col].shift(1)
         
         elif self.relative_to == "close":
             # Ratio relative to the previous close price
-            prev_close = df["close"].shift(1)
+            prev_close = full_df["close"].shift(1)
             
             for col in self.features_to_calculate:
                 # Formula: Current_Feature / Previous_Close
-                df_out[f"{col}_ratio"] = df[col] / prev_close
+                global_ratio_df[f"{col}_ratio"] = full_df[col] / prev_close
 
-        # Fill first row NaNs (due to shift) and any Inf/-Inf (due to division by zero) with 1.0 (no change)
-        return df_out.replace([np.inf, -np.inf], 1.0).fillna(1.0).astype(np.float32)
+        # Fill first row NaNs (due to global shift) and any Inf/-Inf (due to division by zero) with 1.0 
+        # The fillna(1.0) only affects the very first row of the entire dataset.
+        result_df = global_ratio_df.replace([np.inf, -np.inf], 1.0).fillna(1.0).astype(np.float32)
 
-    def _process_samples(self, samples: SequenceCollection, pipeline_extra_info: Dict[str, Any]):
-        """
-        Iterates through samples and applies the calculation to each one.
-        """
+        # --- DEBUG: Show results of global calculation ---
+        first_col = result_df.columns[0]
+        print(f"[DEBUG: GLOBAL PRICE RATIO] Calculated '{first_col}'. NaNs after fill: {result_df[first_col].isnull().sum()}. First 3 rows:\n{result_df.head(3).to_string()}")
+        self.add_trace_print(pipeline_extra_info, "Global Price Ratios calculated on full df_data.")
         
-        for i, sample in enumerate(samples):
-            log_prefix = f"[Sample {getattr(sample, 'original_index', i)}] "
-            
-            # 1. Get the target DataFrame
-            source_data = sample.X.get(self.feature_group_key)
-            
-            if not isinstance(source_data, pd.DataFrame):
-                self.add_trace_print(
-                    pipeline_extra_info, 
-                    f"{log_prefix}Skipped: Feature group '{self.feature_group_key}' is missing or not a DataFrame."
-                )
-                continue
+        return result_df
 
-            try:
-                # 2. Compute Features
-                ratio_df = self._calculate_ratios(source_data)
-                
-                self.add_trace_print(
-                    pipeline_extra_info, 
-                    f"{log_prefix}Computed {len(ratio_df.columns)} PriceRatio features (Shape: {ratio_df.shape})."
-                )
-
-                # 3. Apply Seperatable Logic
-                
-                # A. Add to main feature group
-                if self.seperatable in ("no", "both"):
-                    sample.X[self.feature_group_key] = pd.concat([source_data, ratio_df], axis=1)
-                    self.add_trace_print(
-                        pipeline_extra_info, 
-                        f"{log_prefix}Merged new features into primary group '{self.feature_group_key}'."
-                    )
-
-                # B. Add to new separate feature group
-                if self.seperatable in ("complete", "both"):
-                    sample.X[self.dict_name] = ratio_df.copy()
-                    self.add_trace_print(
-                        pipeline_extra_info, 
-                        f"{log_prefix}Created/updated separate feature group '{self.dict_name}'."
-                    )
-
-            except Exception as e:
-                self.add_trace_print(pipeline_extra_info, f"🔥 {log_prefix}Error calculating PriceRatios: {e}")
 
     def apply_window(self, state: Dict[str, Any], pipeline_extra_info: Dict[str, Any]) -> Dict[str, Any]:
         """Apply calculation during the training pipeline (Fit & Transform)."""
@@ -169,13 +102,64 @@ class PriceRateChange(BaseAddOn):
             f"Starting 'apply_window' for PriceRatios (Group='{self.feature_group_key}', Sep='{self.seperatable}')."
         )
         
-        samples: SequenceCollection = state.get("samples")
-        if not samples:
-            self.add_trace_print(pipeline_extra_info, "No samples found; skipping PriceRatio calculation.")
+        # 1. Get the full DataFrame
+        full_df: pd.DataFrame = state.get('df_data')
+        
+        if full_df is None or not isinstance(full_df, pd.DataFrame):
+            self.add_trace_print(pipeline_extra_info, "Skipped: state['df_data'] (Full DataFrame) is missing or not a DataFrame.")
             return state
 
-        self._process_samples(samples, pipeline_extra_info)
-        
+        # 2. Perform the global calculation
+        try:
+            global_ratio_df = self._calculate_ratios_globally(full_df, pipeline_extra_info)
+        except ValueError as e:
+            self.add_trace_print(pipeline_extra_info, f"🔥 Error during global ratio calculation: {e}")
+            return state
+
+
+        # 3. Apply Sliced Results to each sample window
+        samples: SequenceCollection = state.get("samples")
+        if not samples:
+            self.add_trace_print(pipeline_extra_info, "No samples found; skipping PriceRatio slicing.")
+            return state
+
+        for i, sample in enumerate(samples):
+            log_prefix = f"[Sample {getattr(sample, 'original_index', i)}] "
+            
+            source_data = sample.X.get(self.feature_group_key)
+            
+            if not isinstance(source_data, pd.DataFrame):
+                 self.add_trace_print(
+                    pipeline_extra_info, 
+                    f"{log_prefix}Skipped: Source group '{self.feature_group_key}' not a DataFrame in sample.X."
+                )
+                 continue
+
+            # Get the index of the current window/sample
+            window_index = source_data.index
+            
+            # Slice the global log returns using the window's index
+            sliced_ratio_df = global_ratio_df.loc[window_index]
+            
+            # --- 4. Apply Seperatable Logic ---
+            
+            # A. Add to main feature group
+            if self.seperatable in ("no", "both"):
+                # Use the original source data for concatenation, not the modified one from a previous iteration
+                sample.X[self.feature_group_key] = pd.concat([source_data, sliced_ratio_df], axis=1)
+                self.add_trace_print(
+                    pipeline_extra_info, 
+                    f"{log_prefix}Merged new features into primary group '{self.feature_group_key}'."
+                )
+
+            # B. Add to new separate feature group
+            if self.seperatable in ("complete", "both"):
+                sample.X[self.dict_name] = sliced_ratio_df.copy()
+                self.add_trace_print(
+                    pipeline_extra_info, 
+                    f"{log_prefix}Created/updated separate feature group '{self.dict_name}'."
+                )
+
         self.add_trace_print(pipeline_extra_info, "Finished 'apply_window' for PriceRatios.")
         return state
 
