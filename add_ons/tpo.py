@@ -8,18 +8,19 @@ def _calculate_tpo_profile(
     addon_instance: BaseAddOn,
     X_df: pd.DataFrame,
     ohlc_cols: Tuple[str, ...],
+    value_area_percentage: float,  # <-- New parameter
     pipeline_extra_info: Dict[str, Any],
     sample_index: int
 ) -> Optional[pd.DataFrame]:
     """
     Calculates a TPO-style (hitmap) profile for a given window DataFrame.
     
-    This version creates dynamic price buckets based on unique OHLC values
-    and marks the Point of Control (POC) with 1 (otherwise 0).
+    This version creates dynamic price buckets based on unique OHLC values,
+    marks the Point of Control (POC), and calculates the Value Area (VAH/VAL).
     """
     log_prefix = f"[Sample {sample_index}] TPO Helper: "
     
-    # 1. Extract all OHLC prices from all candles in the window
+    # 1. Extract all OHLC prices
     all_prices_list = []
     for col in ohlc_cols:
         all_prices_list.append(X_df[col])
@@ -91,7 +92,6 @@ def _calculate_tpo_profile(
     # Mark POC bucket (MODIFIED: Use 1/0 instead of True/False)
     if pocBucket:
         for bucket in buckets:
-            # Convert boolean (True/False) to integer (1/0)
             bucket['isPoc'] = 1 if (bucket == pocBucket) else 0
     else:
         for bucket in buckets:
@@ -101,7 +101,118 @@ def _calculate_tpo_profile(
     profile_df = pd.DataFrame(buckets)
     
     # Reverse for display (high to low), matching your Flask app
+    # After this, index 0 is the HIGHEST price.
     profile_df = profile_df.iloc[::-1].reset_index(drop=True)
+            
+    # --- VAH/VAL Calculation (New Logic) ---
+    
+    # 1. Determine total volume
+    total_volume = profile_df['volume'].sum()
+    
+    # Initialize VAH/VAL columns
+    profile_df['isVah'] = 0
+    profile_df['isVal'] = 0
+
+    if total_volume == 0:
+        addon_instance.add_trace_print(
+            pipeline_extra_info, 
+            f"{log_prefix}Skipped VAH/VAL: Total volume is zero."
+        )
+        return profile_df # Return profile with 0s
+
+    # 2. Determine target volume
+    target_volume = total_volume * value_area_percentage
+
+    # 3. Find POC row
+    poc_row_series = profile_df[profile_df['isPoc'] == 1]
+    
+    if poc_row_series.empty:
+         addon_instance.add_trace_print(
+            pipeline_extra_info, 
+            f"{log_prefix}Skipped VAH/VAL: POC row not found."
+        )
+         return profile_df # Should not happen if maxVolume > 0, but safe
+
+    poc_index = poc_row_series.index[0]
+    poc_volume = poc_row_series['volume'].iloc[0]
+    
+    # Track which rows are in the value area
+    in_value_area = pd.Series([False] * len(profile_df), index=profile_df.index)
+    
+    # Add POC to Value Area
+    current_va_volume = poc_volume
+    in_value_area[poc_index] = True
+    
+    # Pointers for the *next* 2-row chunk to be evaluated
+    # Remember: lower index = higher price (above)
+    above_ptr = poc_index - 1 
+    below_ptr = poc_index + 1
+    
+    n_rows = len(profile_df)
+
+    # 4-7. Expand from POC
+    while current_va_volume < target_volume:
+        # Get volume of the *next* two rows "above" (lower indices)
+        vol_above_1 = profile_df.loc[above_ptr, 'volume'] if above_ptr >= 0 else 0
+        vol_above_2 = profile_df.loc[above_ptr - 1, 'volume'] if (above_ptr - 1) >= 0 else 0
+        chunk_above = vol_above_1 + vol_above_2
+        
+        # Get volume of the *next* two rows "below" (higher indices)
+        vol_below_1 = profile_df.loc[below_ptr, 'volume'] if below_ptr < n_rows else 0
+        vol_below_2 = profile_df.loc[below_ptr + 1, 'volume'] if (below_ptr + 1) < n_rows else 0
+        chunk_below = vol_below_1 + vol_below_2
+        
+        # If no more volume to add, stop
+        if chunk_above == 0 and chunk_below == 0:
+            break
+            
+        # Add the larger chunk
+        if chunk_above > chunk_below:
+            current_va_volume += chunk_above
+            # Mark these rows as 'in'
+            if above_ptr >= 0:
+                in_value_area[above_ptr] = True
+            if (above_ptr - 1) >= 0:
+                in_value_area[above_ptr - 1] = True
+            # Move the "above" pointer for the *next* iteration
+            above_ptr -= 2
+        else:
+            current_va_volume += chunk_below
+            # Mark these rows as 'in'
+            if below_ptr < n_rows:
+                in_value_area[below_ptr] = True
+            if (below_ptr + 1) < n_rows:
+                in_value_area[below_ptr + 1] = True
+            # Move the "below" pointer for the *next* iteration
+            below_ptr += 2
+
+    addon_instance.add_trace_print(
+        pipeline_extra_info, 
+        f"{log_prefix}Value Area calculated ({value_area_percentage*100}%): "
+        f"{current_va_volume} / {target_volume} (target) volume."
+    )
+
+    # 8. Find VAH and VAL from the collected rows
+    va_rows = profile_df[in_value_area]
+    
+    if not va_rows.empty:
+        # VAH is the highest price, which is the *lowest index*
+        vah_index = va_rows.index.min()
+        
+        # VAL is the lowest price, which is the *highest index*
+        val_index = va_rows.index.max()
+        
+        addon_instance.add_trace_print(
+            pipeline_extra_info, 
+            f"{log_prefix}VAH Index: {vah_index} (Price: {profile_df.loc[vah_index, 'start']}), "
+            f"VAL Index: {val_index} (Price: {profile_df.loc[val_index, 'start']})"
+        )
+
+        # Set the 1/0 flags
+        profile_df.loc[vah_index, 'isVah'] = 1
+        profile_df.loc[val_index, 'isVal'] = 1
+        
+    # --- End of VAH/VAL Calculation ---
             
     addon_instance.add_trace_print(
         pipeline_extra_info, 
@@ -119,8 +230,8 @@ class TPOProfileAddOn(BaseAddOn):
     endpoint. It does NOT use the 'volume' column, but instead counts
     how many candles in the window touch each discrete price level.
 
-    The resulting profile (a DataFrame, with isPoc as 1/0) is stored in 
-    `sample.X` under the key specified by `output_key`.
+    The resulting profile (a DataFrame, with isPoc, isVah, isVal as 1/0) 
+    is stored in `sample.X` under the key specified by `output_key`.
     """
     on_evaluation_priority = 20  # Runs after normalization (if that's at 10)
 
@@ -129,6 +240,7 @@ class TPOProfileAddOn(BaseAddOn):
         feature_group_key: str = "main",
         output_key: str = "tpo_profile",
         ohlc_cols: tuple = ("open", "high", "low", "close"),
+        value_area_percentage: float = 0.70,  # <-- Configurable VA
     ):
         """
         Args:
@@ -137,11 +249,14 @@ class TPOProfileAddOn(BaseAddOn):
             output_key: The new key in `sample.X` where the resulting
                         TPO profile DataFrame will be stored.
             ohlc_cols: A tuple of column names for Open, High, Low, and Close.
+            value_area_percentage: The percentage (e.g., 0.70 for 70%) of
+                                   volume to include in the Value Area.
         """
         super().__init__()
         self.feature_group_key = feature_group_key
         self.output_key = output_key
         self.ohlc_cols = ohlc_cols
+        self.value_area_percentage = value_area_percentage  # <-- Store it
         self.required_cols = list(ohlc_cols)
 
     def apply_window(self, state: Dict[str, Any], pipeline_extra_info: Dict[str, Any]) -> Dict[str, Any]:
@@ -194,6 +309,7 @@ class TPOProfileAddOn(BaseAddOn):
                 addon_instance=self,
                 X_df=X_df,
                 ohlc_cols=self.ohlc_cols,
+                value_area_percentage=self.value_area_percentage, # <-- Pass it
                 pipeline_extra_info=pipeline_extra_info,
                 sample_index=i
             )
