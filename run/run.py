@@ -27,6 +27,7 @@ from add_ons.price_rate_change import PriceRateChange
 from add_ons.universal_scaler_add_on import ScalerMapperAddOn
 from add_ons.fixed_bucket_tpo import FixedBucketTPOProfileAddOn
 from add_ons.tpo import TPOProfileAddOn
+from add_ons.log_return import LogReturnAddOn
 
 def train_model(
     data_csv,
@@ -58,6 +59,7 @@ def train_model(
             CandleNormalizationAddOn(),
             PriceRateChange(),
             TPOProfileAddOn(),
+            LogReturnAddOn(seperatable=True, prefix="rt_"),
             FixedBucketTPOProfileAddOn(num_buckets=30),
             # ScalerMapperAddOn(
             #     method="standard",
@@ -172,7 +174,7 @@ if __name__ == "__main__":
         "/home/iatell/projects/meta-learning/data/Bitcoin_BTCUSDT_kaggle_1D_candles.csv",
         "/home/iatell/projects/meta-learning/data/baseline_regression.csv",
         do_validation=True,
-        test_mode = False,
+        test_mode = True,
         max_epochs=200,
         hidden_dim=100,
         lr=0.001,
