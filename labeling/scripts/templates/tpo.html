@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TPO Interactive Calculator</title>
+    <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background-color: #222; color: #eee; }
+        #chart-container { width: 100%; height: 600px; border: 1px solid #444; cursor: crosshair; }
+        .controls { margin-top: 15px; display: flex; gap: 15px; align-items: center; }
+        button { padding: 10px 20px; cursor: pointer; background: #2962ff; color: white; border: none; border-radius: 4px;}
+        button:hover { background: #1e4bd1; }
+        .info { color: #aaa; font-size: 0.9em;}
+        .status { font-weight: bold; color: #00e676; }
+        table { margin-top: 20px; width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #444; padding: 8px; text-align: left; }
+        th { background-color: #333; }
+    </style>
+</head>
+<body>
+
+    <h2>TPO Interactive Tool</h2>
+    <div id="chart-container"></div>
+
+    <div class="controls">
+        <p class="info">Status: <span id="status-text" class="status">Waiting for First Click (Start)</span></p>
+        <button onclick="resetSelection()">Reset Selection</button>
+        <a href="/download_csv"><button>Download CSV</button></a>
+    </div>
+
+    <h3>Calculated Zones</h3>
+    <table id="results-table">
+        <thead>
+            <tr>
+                <th>Start Time</th>
+                <th>End Time</th>
+                <th>VAL</th>
+                <th>VAH</th>
+                <th>POC</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <script>
+        // --- 1. Setup Chart ---
+        const chartContainer = document.getElementById('chart-container');
+        const chart = LightweightCharts.createChart(chartContainer, {
+            layout: { background: { type: 'solid', color: '#222' }, textColor: '#DDD' },
+            grid: { vertLines: { color: '#333' }, horzLines: { color: '#333' } },
+            timeScale: { timeVisible: true, secondsVisible: false },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        });
+
+        const candlestickSeries = chart.addCandlestickSeries();
+        
+        // State Variables
+        let clickState = 0; 
+        let startTime = null;
+        let endTime = null;
+        
+        // Storage for lines so we can delete them later
+        let currentLines = []; 
+
+        // --- 2. Fetch Data ---
+        fetch('/data')
+            .then(r => r.json())
+            .then(data => {
+                candlestickSeries.setData(data);
+            });
+
+        // --- 3. Click Logic ---
+        chart.subscribeClick((param) => {
+            if (!param.time) return; 
+
+            if (clickState === 0) {
+                // --- FIRST CLICK (START) ---
+                
+                // 1. CLEAR PREVIOUS LINES AND MARKERS
+                clearOldLines();
+                candlestickSeries.setMarkers([]); 
+
+                // 2. Set new start
+                startTime = param.time;
+                clickState = 1;
+                
+                candlestickSeries.setMarkers([
+                    { time: startTime, position: 'aboveBar', color: '#ffcc00', shape: 'arrowDown', text: 'START' }
+                ]);
+
+                document.getElementById('status-text').innerText = "Start set. Click again for End window.";
+            
+            } else if (clickState === 1) {
+                // --- SECOND CLICK (END) ---
+                endTime = param.time;
+                
+                let finalStart = startTime;
+                let finalEnd = endTime;
+                if (startTime > endTime) {
+                    finalStart = endTime;
+                    finalEnd = startTime;
+                }
+
+                candlestickSeries.setMarkers([
+                    { time: finalStart, position: 'aboveBar', color: '#ffcc00', shape: 'arrowDown', text: 'START' },
+                    { time: finalEnd, position: 'aboveBar', color: '#ffcc00', shape: 'arrowDown', text: 'END' }
+                ]);
+
+                document.getElementById('status-text').innerText = "Calculating...";
+                
+                calculateTPO(finalStart, finalEnd);
+                
+                clickState = 0; 
+            }
+        });
+
+        // --- 4. Helper to Clear Lines ---
+        function clearOldLines() {
+            // Remove every line stored in our array
+            currentLines.forEach(line => {
+                candlestickSeries.removePriceLine(line);
+            });
+            // Empty the array
+            currentLines = [];
+        }
+
+        // --- 5. Backend Calculation ---
+        function calculateTPO(startTs, endTs) {
+            const payload = { start: startTs, end: endTs };
+
+            fetch('/calculate_profile', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if(data.error) {
+                    alert(data.error);
+                    return;
+                }
+                document.getElementById('status-text').innerText = "Calculation Complete. Ready for new selection.";
+                drawLevels(data);
+                addTableRow(startTs, endTs, data);
+            })
+            .catch(err => console.error(err));
+        }
+
+        // --- 6. Drawing ---
+        function drawLevels(levels) {
+            // Create POC Line
+            const pocLine = candlestickSeries.createPriceLine({
+                price: levels.POC,
+                color: 'red',
+                lineWidth: 3,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                axisLabelVisible: true,
+                title: 'POC',
+            });
+            currentLines.push(pocLine); // Store reference
+
+            // Create VAH Line
+            const vahLine = candlestickSeries.createPriceLine({
+                price: levels.VAH,
+                color: '#00e676',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: true,
+                title: 'VAH',
+            });
+            currentLines.push(vahLine); // Store reference
+
+            // Create VAL Line
+            const valLine = candlestickSeries.createPriceLine({
+                price: levels.VAL,
+                color: '#00e676',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: true,
+                title: 'VAL',
+            });
+            currentLines.push(valLine); // Store reference
+        }
+
+        function addTableRow(startTs, endTs, data) {
+            const table = document.getElementById('results-table').querySelector('tbody');
+            const row = table.insertRow(0);
+            
+            const d1 = new Date(startTs * 1000).toLocaleString();
+            const d2 = new Date(endTs * 1000).toLocaleString();
+
+            row.innerHTML = `
+                <td>${d1}</td>
+                <td>${d2}</td>
+                <td>${data.VAL.toFixed(2)}</td>
+                <td>${data.VAH.toFixed(2)}</td>
+                <td>${data.POC.toFixed(2)}</td>
+            `;
+        }
+
+        function resetSelection() {
+            clickState = 0;
+            candlestickSeries.setMarkers([]); 
+            clearOldLines(); // Also clear lines on reset
+            document.getElementById('status-text').innerText = "Waiting for First Click (Start)";
+        }
+    </script>
+</body>
+</html>
